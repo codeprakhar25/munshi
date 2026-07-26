@@ -159,11 +159,18 @@ export async function chatTools<A = Record<string, unknown>>(
   });
   const calls = msg?.tool_calls ?? [];
   if (!calls.length) {
+    // Observed on device: after a long reasoning burn the model emits a
+    // perfectly correct tool call as TEXT in `content` instead of in
+    // `tool_calls`, and hits the token cap on the way —
+    //   content: [{"name":"resolve_draft","parameters":{"decision":"amend",…}}]
+    // Discarding that costs a correct answer and a ~40s retry, so parse it.
+    const salvaged = salvageToolCall<A>(msg?.content ?? '', tools);
     log('no_tool_call', {
       finish: data?.choices?.[0]?.finish_reason,
       reasoning_chars: (msg?.reasoning_content ?? '').length,
+      salvaged: salvaged.length,
     });
-    return [];
+    return salvaged;
   }
   return calls.map((c) => {
     let args = {} as A;
@@ -174,6 +181,36 @@ export async function chatTools<A = Record<string, unknown>>(
     }
     return { tool: c.function.name, args };
   });
+}
+
+/**
+ * Pull a tool call out of a prose/JSON `content` body. Only accepts names the
+ * caller actually offered, so a hallucinated function name is still rejected.
+ */
+function salvageToolCall<A>(content: string, tools: ToolSchema[]): ToolCall<A>[] {
+  if (!content.includes('{')) return [];
+  const names = new Set(tools.map((t) => t.function.name));
+  const out: ToolCall<A>[] = [];
+
+  // Try progressively smaller slices: the tail is often truncated mid-object.
+  const start = content.indexOf('[') >= 0 ? content.indexOf('[') : content.indexOf('{');
+  for (let end = content.length; end > start; end--) {
+    const slice = content.slice(start, end).trim();
+    if (!/[\]}]$/.test(slice)) continue;
+    try {
+      const parsed = JSON.parse(slice);
+      for (const item of Array.isArray(parsed) ? parsed : [parsed]) {
+        const name = item?.name ?? item?.function?.name;
+        const args = item?.parameters ?? item?.arguments ?? item?.function?.arguments;
+        if (!name || !names.has(name)) continue;
+        out.push({ tool: name, args: (typeof args === 'string' ? JSON.parse(args) : args ?? {}) as A });
+      }
+      if (out.length) return out;
+    } catch {
+      /* keep shrinking */
+    }
+  }
+  return out;
 }
 
 // ----------------------------------------------------------------- tts -----

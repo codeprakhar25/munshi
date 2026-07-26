@@ -213,7 +213,7 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
     lift.set(withSpring(cards.length ? 1 : 0, { damping: 18, stiffness: 120 }));
   }, [cards.length, lift]);
   const liftStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: -110 * lift.value }],
+    transform: [{ translateY: -175 * lift.value }],
   }));
 
   // Fly-in: the orb starts life exactly where the FAB sits (small, low) and
@@ -340,7 +340,7 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
 const styles = StyleSheet.create({
   frost: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(251,249,246,0.98)',
+    backgroundColor: 'rgba(251,249,246,0.995)',
   },
   center: {
     flex: 1,
@@ -404,7 +404,7 @@ const styles = StyleSheet.create({
     left: 18,
     right: 18,
     top: '50%',
-    marginTop: -24,
+    marginTop: -35,
     bottom: 24,
     gap: 8,
   },

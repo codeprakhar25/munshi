@@ -44,10 +44,19 @@ export function replyLangFor(
   detected?: string | null,
 ): ReplyLang | null {
   if (transcript) {
+    // Any Indic script that ISN'T Devanagari — Odia, Tamil, Bengali, Telugu,
+    // Kannada, Malayalam, Gujarati, Gurmukhi — means they spoke a language we
+    // have no templates for. Return null so the MODEL phrases it in their
+    // language. Falling through to the app-language default here is what
+    // answered an Odia speaker in Hindi.
+    if (/[\u0980-\u0DFF\u0A80-\u0AFF\u0A00-\u0A7F]/.test(transcript)) return null;
     if (/[ऀ-ॿ]/.test(transcript)) return 'hi';        // spoken Hindi, Devanagari
     if (HINGLISH.test(transcript)) return 'hi';        // spoken Hindi, romanised
     if (/[a-z]/i.test(transcript)) return 'en';        // genuinely English
   }
+
+  // Same reasoning for the detected code: od-IN / ta-IN / bn-IN are not ours.
+  if (detected && !/^(hi|en)/.test(detected)) return null;
 
   if (detected?.startsWith('hi')) return 'hi';
   if (detected?.startsWith('en')) return 'en';

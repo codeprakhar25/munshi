@@ -564,6 +564,24 @@ export function commitDrafts(khata: Khata, drafts: Draft[]): Turn['committed'] {
   return committed;
 }
 
+/**
+ * Undo the entries a set of drafts just wrote. Entries are append-only in
+ * spirit, but an immediate correction is not history — it is the merchant
+ * fixing what they just said, and leaving both rows in the passbook would show
+ * money that never moved.
+ */
+export function reverseCommitted(khata: Khata, drafts: Draft[]): void {
+  for (const d of drafts) {
+    const cust = khata.customers.find((c) => c.id === d.customer_id);
+    if (!cust || !cust.entries.length) continue;
+    cust.entries.pop();
+    cust.balance = deriveBalance(cust.entries);
+    for (let i = khata.audit.length - 1; i >= 0; i--) {
+      if (khata.audit[i].customer_id === cust.id) { khata.audit.splice(i, 1); break; }
+    }
+  }
+}
+
 // ----------------------------------------------------------------- reply ----
 
 /**
@@ -661,7 +679,7 @@ async function extract(transcript: string, khata: Khata, session: Session) {
     // again" to a sentence it understood perfectly well. There is no outcome where
     // we don't want an actions array: `unclear` already covers "couldn't parse it".
     tool_choice: { type: 'function', function: { name: 'apply_ledger_actions' } },
-    max_tokens: 1500,
+    max_tokens: 2500,
     label: 'extract',
   });
   const actions = calls[0]?.args?.actions;
@@ -727,7 +745,7 @@ export async function runTurn(
           { role: 'user', content: transcript },
         ],
         RESOLVE_TOOL,
-        { tool_choice: { type: 'function', function: { name: 'resolve_draft' } }, max_tokens: 900, label: 'resolve' },
+        { tool_choice: { type: 'function', function: { name: 'resolve_draft' } }, max_tokens: 2000, label: 'resolve' },
       );
       const decision = calls[0]?.args?.decision ?? 'new_command';
 
@@ -843,12 +861,50 @@ export async function runTurn(
       break;
     }
 
-    default:
+    default: {
+      // Nothing is pending, but something may have JUST been written. A negation
+      // now is the merchant correcting that, not a new command — without an
+      // approval step this is the only way back.
+      const CORRECTION = /नहीं|नही|गलत|हटा|nahi|nahin|\bno\b|galat|hatao|wrong|cancel/i;
+      if (session.undo?.drafts.length && CORRECTION.test(transcript)) {
+        const prior = session.undo.drafts;
+        session.undo = null;
+        reverseCommitted(khata, prior);
+        session.drafts = prior.map((d) => ({ ...d }));
+        // Re-price against the restored balances, then let resolve_draft amend.
+        for (const d of session.drafts) {
+          const c = khata.customers.find((x) => x.id === d.customer_id);
+          if (c) { d.person = asPerson(c); price(d, c.balance); }
+        }
+        log('undo_reopened', { drafts: session.drafts.length });
+        session.stage = 'confirming';
+        return runTurn(transcript, session, khata, opts);
+      }
+      session.undo = null;
       await stageFresh(transcript);
+    }
   }
 
   if (session.stage !== 'picking') session.stuck = 0;
   recompute(session);
+
+  // AUTO-COMMIT. When every line is unambiguous there is nothing to ask about,
+  // so asking is pure latency — it doubles the turns for the common case. Only a
+  // genuine conflict (which customer? how much?) still stops and asks.
+  // The write stays recoverable: `undo` holds it for one turn.
+  // No stageIn guard: a corrected line is just as unambiguous as a fresh one, and
+  // leaving it at "सही है?" reintroduces the approval turn for exactly the case
+  // the merchant has already had to speak twice.
+  if (session.stage === 'confirming' && !committed.length) {
+    const ready = session.drafts.filter((d) => d.status === 'ready');
+    if (ready.length && ready.length === session.drafts.length) {
+      committed = commitDrafts(khata, session.drafts);
+      session.undo = { drafts: session.drafts.map((d) => ({ ...d })) };
+      session.drafts = [];
+      recompute(session);
+    }
+  }
+
   const tRoute = Date.now();
 
   // The screen can be right long before the voice is. Emitting here means the
