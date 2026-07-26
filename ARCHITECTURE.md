@@ -15,7 +15,8 @@ This is a decision record. Every entry is a choice, what it was chosen over, and
   only the *storage script* guarantee — a name heard in English is stored as it was heard.
   §7's contact matching therefore falls back to the `aliases` already on each row plus plain
   case/space normalization, instead of a transliterated Latin match key.
-- Remaining open questions (barge-in, launch language set, demo-day server host) parked with §6.
+- **§3 Agent location — revised: the agent runs in the app, no server.** See §3.
+- Remaining open questions (barge-in, launch language set) parked with §6.
 
 ---
 
@@ -32,7 +33,7 @@ speak  →  DRAFT  →  resolve who  →  confirm / edit by voice  →  commit t
 Three jobs, deliberately separated because today's POC collapses all three into a single immediate
 write:
 
-1. **Add** — hear the entry, stage it, show a server-computed balance preview.
+1. **Add** — hear the entry, stage it, show a balance preview computed by our code, not the model.
 2. **Resolve** — link the spoken name to a person. Ambiguous → ask. Unknown → offer device
    contacts, or walk-in with no phone.
 3. **Edit, then commit** — amend the *pending* draft by voice; only हाँ writes it.
@@ -54,10 +55,11 @@ like the POC's `khata.json`.
 
 **Over:** `expo-sqlite`, `react-native-mmkv`.
 
-**Why.** The khata is serialized and sent to the agent on every turn regardless of how it's stored.
-Keeping it as a JSON document identical to `khata.json` means the POC's existing headless tests
-(`e2e.mjs`, `test-turns.mjs`) run against real app data with **zero translation layer** — that is
-the whole argument. Volume is tens of people and hundreds of entries; nothing here needs an index.
+**Why.** The agent takes the whole khata as an argument on every turn regardless of how it's
+stored (§3). Keeping it as a JSON document identical to the POC's `khata.json` means the headless
+harness feeds the agent exactly the bytes the app does — **zero translation layer**, and the POC's
+verified-working table stays a valid regression suite. Volume is tens of people and hundreds of
+entries; nothing here needs an index.
 
 `expo-sqlite` buys transactions and queries that start to matter around 10k rows, and costs a
 schema, migrations, and a serialize-back-to-JSON step on every turn. None of that earns anything
@@ -74,10 +76,10 @@ safe later.
 ```jsonc
 // one AsyncStorage key: "khata.v1"
 {
-  "shop": "...", "currency": "INR", "appLang": "hi-IN",
+  "shop": "...", "currency": "INR",
   "customers": [{
     "id": "c1", "name": "रमेश कुमार", "name_en": "Ramesh Kumar",
-    "aliases": [...], "match_key": "ramesh kumar",   // Latin, for script-agnostic matching
+    "aliases": [...], "match_key": "ramesh kumar",   // normalized, for script-agnostic matching
     "phone": "+91...",                                // set when linked to a contact
     "items": "दूध, चीनी", "lang": "hi-IN",
     "balance": 500,                                   // DERIVED — sum of entries, never set directly
@@ -98,7 +100,7 @@ safe later.
 stream, so there is nothing to feed the socket with.
 
 **Why `react-native-audio-api`.** It implements Web Audio on React Native, so the browser POC ports
-almost directly and, critically, **the server does not change at all**:
+almost directly:
 
 - `AudioRecorder.onAudioReady({sampleRate: 16000, bufferLength: 1600}, cb)` delivers Float32 PCM at
   exactly the rate and frame size `mic-worklet.js` already produces. The worklet becomes ~10 lines.
@@ -126,30 +128,57 @@ with no maintainer answer. We do not depend on it — see §5.
 
 ---
 
-## 3. Agent location — server-side, stateless per turn
+## 3. Agent location — in the app. No server.
 
-**Decision:** the agent (`../poc/voice-edit/agent.mjs`) keeps running in Node. The app sends the
-khata up with each turn; the server returns drafts or the mutated khata and holds no state.
+**Decision (revised 2026-07-26):** the agent runs **on the device**, in the app, talking to
+`api.sarvam.ai` directly. There is no proxy process.
 
-**Over:** running the agent on-device.
+**Over:** the POC's Node proxy (`../poc/voice-edit/server.mjs`).
 
-**Why.** Two reasons, one hard and one practical.
+**What made this possible.** The POC needs a server for one reason only: Sarvam authenticates its
+WebSockets with an `api-subscription-key` **header**, and browsers cannot set headers on a
+WebSocket. React Native can — verified in this repo at
+`node_modules/react-native/Libraries/WebSocket/WebSocket.js:98`:
 
-1. **The Sarvam key must never ship in the APK.** React Native *can* set WebSocket headers, so
-   talking to Sarvam directly from the phone is technically possible and is exactly the wrong move.
-2. Stateless means a server restart mid-demo costs nothing, and the same `agent.mjs` stays testable
-   headlessly with no phone attached.
+```js
+constructor(url, protocols, options: ?{headers?: {...}})
+  → NativeWebSocketModule.connect(url, protocols, {headers}, this._socketId)
+```
 
-The refactor this requires: `applyIntent` currently computes *and* writes in one breath. It splits
-into `stageIntent` (compute, no write) / `amendDraft` / `commitDrafts` (the only writer), and
-`runTurn` takes the khata as an argument instead of reading it off disk.
+So `new WebSocket(url, null, { headers: { 'api-subscription-key': KEY } })` reaches Sarvam from the
+phone. The proxy's entire reason for existing disappears.
 
-**Hard rule, preserved:** the LLM classifies and the LLM phrases — **only the server does
-arithmetic.** The "balance after ₹270" on a pending line is server-computed and handed to the
-phrasing call as fact. A model doing mental math will eventually read a wrong rupee figure aloud.
+**What we gain.** No LAN IP to configure, no cleartext-`ws://` exemption, no server process to
+babysit, no laptop dependency — the app works on mobile data anywhere. And one less network hop:
+the POC measured a US round trip at 250–400ms *each way*, and the proxy was adding a hop of its own.
 
-**Deployment note:** if the server ever leaves the laptop, host it in `ap-south-1`. A US hop was
-measured at 250–400ms *each way* — larger than any model-side optimisation available to us.
+**What it costs, plainly: the Sarvam key ships in the APK.** The POC README explicitly warns against
+this, and it is the right warning for a product. It is accepted here as a **demo-stage** trade.
+Before this is put in a real merchant's hands the key moves behind a thin token-issuing service —
+the agent code does not change when that happens, only `sarvam.ts`'s credential source does.
+
+**Hard rule, preserved and now more important:** the LLM classifies and the LLM phrases — **only
+our code does arithmetic.** The "balance after ₹270" on a pending line is computed in `agent.ts`
+and handed to the phrasing call as fact. A model doing mental math will eventually read a wrong
+rupee figure aloud.
+
+**The refactor:** `applyIntent` currently computes *and* writes in one breath. It splits into
+`stageIntent` (compute, no write) / `amendDraft` / `commitDrafts` (the only writer), and `runTurn`
+takes the khata as an argument rather than reading a file.
+
+### Keeping the headless test loop
+
+This is the POC's most valuable property and moving into the app must not cost it. So
+**`src/agent/` imports nothing from `react-native`** — only `fetch` and `WebSocket`, which exist in
+both runtimes. Node 24 strips TypeScript natively, so the *same* `.ts` files run under Node with no
+build step and no `tsx`:
+
+```bash
+node --env-file=.env scripts/turns.ts     # scripted conversation, no phone, no mic
+```
+
+That boundary is load-bearing. A single `react-native` import inside `src/agent/` breaks headless
+testing, which is how every finding in the POC README was found.
 
 ---
 
@@ -249,7 +278,7 @@ stutter.** The fix is a real jitter buffer:
 - **Match the device sample rate.** The POC forces `AudioContext({sampleRate: 22050})`; Android is
   natively 48000, which pushes a resample into the audio graph. Open at the device rate and request
   `speech_sample_rate: 48000` from Bulbul.
-- Server-side, coalesce Bulbul's bursty frames to ~120ms before forwarding.
+- Coalesce Bulbul's bursty frames to ~120ms as they arrive, before handing them to the scheduler.
 
 Isolated in `src/voice/jitter.ts` so it is testable with synthetic arrival times rather than by
 listening to it.
@@ -345,15 +374,22 @@ the redesign should touch only `src/app/*` and new `src/components/*`.** If it n
 
 ```
 src/
+  agent/sarvam.ts    Sarvam client — fetch + WebSocket, verbatim logging   ┐ NO react-native
+  agent/agent.ts     draft machine, tool schemas, all arithmetic           │ imports — these
+  agent/types.ts     khata / draft / message shapes                        ┘ run under Node too
   voice/audio.ts     AudioRecorder, AudioContext, mic gate   ← the file LiveKit would replace
   voice/jitter.ts    buffer + scheduling (unit-testable)
-  voice/socket.ts    ws client + message protocol
+  voice/session.ts   wires audio ↔ agent ↔ store; owns the stage machine
   db/khata.ts        AsyncStorage store, append-only entries, derived balance
   contacts.ts        expo-contacts + match key
-  state/session.ts   client mirror of the draft machine — what the UI binds to
   app/index.tsx      the entire (throwaway) UI for now
   i18n/              ⏸ deferred with §6
+scripts/turns.ts     headless harness — imports src/agent/* directly
 ```
+
+**The `agent/` boundary is a rule, not a convention:** nothing in it may import `react-native`,
+`expo-*`, or any Node built-in. That is what keeps `scripts/turns.ts` runnable and the money logic
+testable without a phone.
 
 ---
 
@@ -381,10 +417,11 @@ and we rebuild **once**:
 
 | risk | mitigation | residual |
 |---|---|---|
+| **Sarvam key ships in the APK** (§3) | accepted as a demo-stage trade; isolated in `sarvam.ts` so only its credential source changes later | anyone with the APK can extract the key — rotate after the demo |
 | Android AEC unverified in `react-native-audio-api` | hold-to-talk + half-duplex gate; never depend on AEC | speakerphone-on-counter needs LiveKit eventually |
 | Saaras hallucinates commands from non-speech audio | confirm gate — nothing writes unattended | a merchant confirming without reading |
 | `sarvam-105b` silently drops actions | single `actions[]` tool everywhere | keep verbatim logging to catch regressions |
-| Cleartext `ws://` to a LAN IP | `expo.android.usesCleartextTraffic: true` | dev-only; TLS before any real deployment |
+| A `react-native` import creeps into `src/agent/` | headless harness breaks loudly on the next run | none if `scripts/turns.ts` is run regularly |
 | Bulbul has no Urdu | `ttsLang()` falls back to Hindi and **reports** it | Urdu-speaking customers hear a Hindi voice |
 
 **Keep the verbatim request/response logging in `sarvam.mjs`.** Every finding cited in this document
@@ -401,5 +438,5 @@ Inside a framework's abstraction it would have been much harder to catch.
    interrupt moment.
 3. **Launch languages** — hi / en / mr / ta from the mock. Cheap for STT; each needs its own i18n
    strings, so it lands with §6.
-4. **Where the server runs on demo day** — laptop on venue WiFi is simplest; `ap-south-1` is
-   250–400ms/hop faster than anything US-hosted if we need it off the laptop.
+4. ~~Where the server runs on demo day~~ — **moot: there is no server** (§3). The app talks to
+   `api.sarvam.ai` directly, so it works on mobile data with no laptop present.
