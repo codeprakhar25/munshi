@@ -26,7 +26,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { Draft } from '@/agent/types';
-import { fadeUp, GlowDisc, Gradient, PressScale } from '@/components/ui/motion';
+import { fadeUp, GlowDisc, PressScale } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
 import { Text } from '@/tw';
 import type { VoiceState, VoiceView } from '@/voice/session';
@@ -315,22 +315,12 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
       entering={FadeIn.duration(300)}
       exiting={FadeOut.duration(220)}
       onPress={onClose}
-      // elevation must beat every elevated view on home (max is the FAB at 10):
-      // Android draw order follows elevation, not zIndex, across siblings.
-      style={[StyleSheet.absoluteFill, { zIndex: 40, elevation: 30, backgroundColor: 'rgba(251,249,246,0.58)' }]}>
-      {/* Ambience in LINEAR gradients only — this renderer draws radial
-          gradients as linear bands (the "rectangular box" bug), so radials are
-          banned on this overlay. Saffron dawn above, warmth pooling below. */}
-      <Gradient
-        pointerEvents="none"
-        image="linear-gradient(180deg, rgba(254,243,199,0.85) 0%, rgba(254,243,199,0) 40%)"
-        style={StyleSheet.absoluteFill}
-      />
-      <Gradient
-        pointerEvents="none"
-        image="linear-gradient(0deg, rgba(255,237,213,0.7) 0%, rgba(255,237,213,0) 38%)"
-        style={StyleSheet.absoluteFill}
-      />
+      // NO elevation here: Android renders an elevated translucent view's own
+      // shadow THROUGH it as a rectangle. The overlay is the last sibling, so
+      // plain document order + zIndex already puts it on top.
+      // NO gradient washes either — every decorative layer here must be a plain
+      // View or a GlowDisc until the backgroundImage renderer proves trustworthy.
+      style={[StyleSheet.absoluteFill, { zIndex: 40, backgroundColor: 'rgba(251,249,246,0.58)' }]}>
 
       <RNView pointerEvents="box-none" style={[styles.center, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         <PressScale onPress={onClose} scaleTo={0.92} style={[styles.close, { top: insets.top + 10 }]}>

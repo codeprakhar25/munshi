@@ -78,6 +78,26 @@ export function matchCustomers(khata: Khata, spoken: string | null | undefined):
   return active.length && active.length < top.length ? active : top;
 }
 
+/**
+ * Is this plausibly a person's name?
+ *
+ * Creating customers without asking means whatever the model puts in
+ * name_spoken becomes a row in the merchant's book. On the device that produced
+ * a customer literally called "ऊपर जाता है नहीं।" — a whole sentence — sitting in
+ * the ledger owing ₹1. A name is short and has no sentence punctuation.
+ */
+export function looksLikeName(n: string | null | undefined): boolean {
+  const t = (n ?? '').trim();
+  if (t.length < 2 || t.length > 30) return false;
+  if (/[।?!,;:]/.test(t)) return false;              // sentence punctuation
+  if (t.split(/\s+/).length > 4) return false;        // names are not clauses
+  if (/\d/.test(t)) return false;                     // amounts are not names
+  // Verbs and fillers that show up when the model grabs the wrong span.
+  if (/\b(hai|hain|nahi|nahin|kya|jata|jaata|karo|karna|diye|liya|bolo|boliye)\b/i.test(t)) return false;
+  if (/(है|हैं|नहीं|क्या|जाता|करो|दिये|दिए|लिया|बोलो)/.test(t)) return false;
+  return true;
+}
+
 const asPerson = (c: Customer): DraftPerson => ({
   id: c.id, name: c.name, name_en: c.name_en, balance: c.balance, phone: c.phone ?? null,
 });
@@ -159,7 +179,7 @@ const LEDGER_TOOLS: ToolSchema[] = [{
             properties: {
               kind: {
                 type: 'string',
-                enum: ['payment', 'udhaar', 'correction', 'new_customer', 'balance_query', 'unclear'],
+                enum: ['payment', 'udhaar', 'correction', 'new_customer', 'delete_last', 'balance_query', 'unclear'],
                 description:
                   'payment = money came IN, the customer HANDED OVER cash (Ramesh NE 200 diye, chukaya, wapas, paid, cleared). '
                   + 'udhaar = goods went OUT on credit (liya, le gaya, saaman liya, likh do, add, aur de do). '
@@ -169,6 +189,9 @@ const LEDGER_TOOLS: ToolSchema[] = [{
                   + 'Whenever a purchasable item is named at all, it is almost certainly udhaar. '
                   + 'correction = set the balance to an exact figure (galat hai, actually it is). '
                   + 'new_customer = open a NEW khata for somebody not in the roster (naya khata, new account). '
+                  + 'delete_last = ERASE an existing entry from the book: hatao, hata do, mita do, delete karo, remove karo, '
+                  + 'entry galat thi hatao. Targets that customer\'s most recent entry. This is removal of a written line, '
+                  + 'never a payment — no money moved. '
                   + 'balance_query = merchant is only asking, nothing changes. '
                   + 'unclear = no amount stated, or you cannot tell which customer.',
               },
@@ -427,7 +450,7 @@ export function stageIntent(
 
   const draft: Draft = {
     id,
-    kind: (kindIn === 'new_customer' ? 'new_customer' : kindIn === 'udhaar' ? 'udhaar' : kindIn === 'correction' ? 'correction' : 'payment'),
+    kind: (kindIn === 'new_customer' ? 'new_customer' : kindIn === 'udhaar' ? 'udhaar' : kindIn === 'correction' ? 'correction' : kindIn === 'delete_last' ? 'delete_last' : 'payment'),
     name_spoken: spoken,
     customer_id: null,
     person: null,
@@ -440,7 +463,7 @@ export function stageIntent(
     options: [],
   };
 
-  if (kindIn === 'unclear' || !['payment', 'udhaar', 'correction', 'new_customer'].includes(kindIn)) {
+  if (kindIn === 'unclear' || !['payment', 'udhaar', 'correction', 'new_customer', 'delete_last'].includes(kindIn)) {
     draft.status = act?.missing === 'amount' ? 'needs_amount' : act?.missing === 'customer' ? 'needs_customer' : 'unclear';
   }
 
@@ -505,11 +528,24 @@ export function stageIntent(
     log('rejected_model_pick', { spoken, wouldHaveBeen: byId.id });
   }
 
+  if (!person && draft.kind === 'delete_last') {
+    // NEVER auto-create a customer just to delete from them.
+    draft.status = 'needs_customer';
+    return draft;
+  }
+
   if (!person) {
     // A name we do not recognise is a NEW customer, so open the khata and write
     // it — asking "whose name?" was a dead end the merchant could not get out of.
     // Cost of this choice: a mis-transcription creates a junk row (प्रख्यात vs
     // प्रखर), recoverable for one turn via `undo`.
+    if (spoken && !looksLikeName(spoken)) {
+      // Do not put a sentence in the book as a person.
+      log('rejected_as_name', { spoken });
+      draft.name_spoken = null;
+      draft.status = 'needs_customer';
+      return draft;
+    }
     if (spoken) {
       log('auto_new_customer', { spoken, amount });
       draft.kind = 'new_customer';
@@ -540,6 +576,21 @@ export function stageIntent(
 
   draft.customer_id = person.id;
   draft.person = asPerson(person);
+
+  // Deleting: the target is the customer's LAST entry — no amount needed, the
+  // preview comes from the entry being removed. Removing the final entry
+  // returns the balance to that entry's frozen `before`, by construction.
+  if (draft.kind === 'delete_last') {
+    const last = person.entries[person.entries.length - 1];
+    if (!last) { draft.status = 'unclear'; return draft; }
+    draft.amount = last.amount;
+    draft.label = last.label ?? (last.action === 'payment' ? 'जमा' : undefined);
+    draft.before = person.balance;
+    draft.after = last.before;
+    draft.overpaid = 0;
+    draft.status = 'ready';
+    return draft;
+  }
 
   // A merchant can name the same person twice in one breath ("Ramesh ne 100 diye,
   // aur Ramesh ko 50 ka saaman bhi de do"). Price against the running projection
@@ -585,6 +636,23 @@ export function amendDraft(
     }
   }
 
+  // A delete previews from the entry being removed, not from price() — recompute
+  // it against whoever the draft now points at.
+  if (draft.kind === 'delete_last') {
+    const c = draft.customer_id ? khata.customers.find((x) => x.id === draft.customer_id) : null;
+    const last = c?.entries[c.entries.length - 1];
+    if (c && last) {
+      draft.amount = last.amount;
+      draft.label = last.label;
+      draft.before = c.balance;
+      draft.after = last.before;
+      draft.status = 'ready';
+    } else {
+      draft.status = 'unclear';
+    }
+    return draft;
+  }
+
   if (draft.amount === null) { draft.status = 'needs_amount'; return draft; }
   if (draft.kind !== 'new_customer' && !draft.person) { draft.status = 'needs_customer'; return draft; }
 
@@ -605,6 +673,22 @@ export function commitDrafts(khata: Khata, drafts: Draft[]): Turn['committed'] {
 
   for (const d of drafts) {
     if (d.status !== 'ready') continue;
+
+    // Deletion: pop the last entry and re-derive. Earlier entries' frozen
+    // before/after stay valid because only the FINAL entry is ever removed.
+    if (d.kind === 'delete_last') {
+      const cust = khata.customers.find((c) => c.id === d.customer_id);
+      if (!cust || !cust.entries.length) continue;
+      const before = cust.balance;
+      const removed = cust.entries.pop() as Entry;
+      cust.balance = deriveBalance(cust.entries);
+      for (let i = khata.audit.length - 1; i >= 0; i--) {
+        if (khata.audit[i].customer_id === cust.id) { khata.audit.splice(i, 1); break; }
+      }
+      log('entry_deleted', { customer_id: cust.id, amount: removed.amount, label: removed.label });
+      committed.push({ customer_id: cust.id, name: cust.name, name_en: cust.name_en, before, after: cust.balance, amount: removed.amount });
+      continue;
+    }
 
     let cust: Customer | undefined;
     if (d.kind === 'new_customer') {
@@ -686,6 +770,10 @@ function draftFacts(d: Draft): string {
   const who = d.person ? `${d.person.name_en} (${d.person.name})` : (d.name_spoken ?? 'someone');
   switch (d.status) {
     case 'ready': {
+      if (d.kind === 'delete_last') {
+        return `REMOVE ${who}'s last entry (${d.label ?? 'entry'}, ${d.amount} rupees) from the book. `
+          + `Balance would go from ${d.before} back to ${d.after}. NOT DELETED YET — ask the merchant to confirm the deletion.`;
+      }
       if (d.kind === 'new_customer') {
         return `NEW khata for ${who}, opening balance ${d.after} rupees. NOT SAVED YET — ask the merchant to confirm.`;
       }
@@ -1042,7 +1130,10 @@ export async function runTurn(
   // the merchant has already had to speak twice.
   if (session.stage === 'confirming' && !committed.length) {
     const ready = session.drafts.filter((d) => d.status === 'ready');
-    if (ready.length && ready.length === session.drafts.length) {
+    // Deletions NEVER auto-commit: erasing a written line on a possibly
+    // hallucinated transcript is not recoverable by undo the way an extra
+    // append is. A delete always hears "हाँ" first.
+    if (ready.length && ready.length === session.drafts.length && !session.drafts.some((d) => d.kind === 'delete_last')) {
       committed = commitDrafts(khata, session.drafts);
       session.undo = { drafts: session.drafts.map((d) => ({ ...d })) };
       session.drafts = [];

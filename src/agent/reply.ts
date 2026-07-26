@@ -80,6 +80,12 @@ const who = (d: Draft, l: ReplyLang) =>
 /** A single pending line, read back with both balances so it can be checked. */
 function pending(d: Draft, l: ReplyLang): string | null {
   if (d.status === 'ready') {
+    if (d.kind === 'delete_last') {
+      const what = d.label ? `${d.label} ` : '';
+      return l === 'hi'
+        ? `${who(d, l)} की आखिरी एंट्री — ${what}${rupees(d.amount ?? 0, l)} — हटा दूँ?`
+        : `Remove ${who(d, l)}'s last entry — ${what}${rupees(d.amount ?? 0, l)}?`;
+    }
     if (d.kind === 'new_customer') {
       return l === 'hi'
         ? `${who(d, l)} का नया खाता, ${rupees(d.amount ?? 0, l)} उधार। लिख दूँ?`

@@ -64,7 +64,7 @@ export interface Khata {
  * Everything in the ledger passes through this state first — see ARCHITECTURE.md §0
  * for why the confirm gate is a correctness feature rather than UX polish.
  */
-export type DraftKind = 'payment' | 'udhaar' | 'correction' | 'new_customer';
+export type DraftKind = 'payment' | 'udhaar' | 'correction' | 'new_customer' | 'delete_last';
 
 export type DraftStatus =
   /** Complete and priced — waiting only for confirmation. */
