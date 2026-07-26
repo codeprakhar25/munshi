@@ -140,6 +140,11 @@ export class VoiceAudio {
     this.setTransmit(false);
     const ctx = this.context();
     this.jitter = new JitterBuffer({
+      // Bulbul generates roughly at speaking speed, so early chunks can arrive
+      // slower than they play out — that is the gapping. A deeper cushion costs
+      // a little latency once, at the start, and removes the dropouts entirely.
+      prerollMs: 400,
+      minChunkMs: 150,
       sampleRate: this.playbackRate,
       now: () => ctx.currentTime,
       schedule: (samples, at) => {

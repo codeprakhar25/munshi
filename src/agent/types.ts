@@ -135,7 +135,7 @@ export interface Turn {
   stage: Stage;
   drafts: Draft[];
   /** Non-empty only on the turn that commits. */
-  committed: { customer_id: string; name_en: string; before: number; after: number; amount: number }[];
+  committed: { customer_id: string; name: string; name_en: string; before: number; after: number; amount: number }[];
   /** True if this turn changed the khata. */
   wrote: boolean;
   khata: Khata;

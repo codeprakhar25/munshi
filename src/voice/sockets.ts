@@ -167,7 +167,10 @@ export class TtsSocket {
           speech_sample_rate: String(sampleRate),
           // wav is 163ms to first audio; mp3 is 394ms and pcm_s16le is rejected outright.
           output_audio_codec: 'wav',
-          pace: 1.0,
+          // Default 1.0 plods for a short confirmation. Range is 0.3-3.0; 1.15 is
+          // brisk without clipping the rupee figures, which are the words that
+          // actually have to land.
+          pace: 1.15,
         },
       }));
     });

@@ -17,6 +17,8 @@
  *
  * No `react-native` / `expo-*` / Node imports — see ARCHITECTURE.md §3.
  */
+import { parseAmount } from './numbers';
+import { templateReply, replyLangFor, type ReplyContext } from './reply';
 import { chatTools, log, type ChatMessage, type ToolSchema } from './sarvam';
 import type {
   Customer, Draft, DraftPerson, Entry, Khata, Session, Stage, Turn,
@@ -355,10 +357,26 @@ const price = (d: Draft, base: number): void => {
  * preview. It never writes. A voice agent that silently guesses at money is
  * worse than one that asks again.
  */
-export function stageIntent(khata: Khata, act: RawAction, id: string, projected?: Map<string, number>): Draft {
+export function stageIntent(
+  khata: Khata,
+  act: RawAction,
+  id: string,
+  projected?: Map<string, number>,
+  /** The raw utterance, used ONLY to recover an amount the model dropped, and
+   *  only when this is the sole action — with several actions in one breath
+   *  there is no way to know which one a stray number belongs to. */
+  soleUtterance?: string,
+): Draft {
   const kindIn = act?.kind ?? 'unclear';
   const spoken = act?.name_spoken?.trim() || null;
-  const amount = Number.isFinite(Number(act?.amount)) && Number(act?.amount) > 0 ? Number(act.amount) : null;
+  let amount = Number.isFinite(Number(act?.amount)) && Number(act?.amount) > 0 ? Number(act.amount) : null;
+  if (amount === null && soleUtterance) {
+    const recovered = parseAmount(soleUtterance);
+    if (recovered !== null) {
+      log('amount_recovered', { from: soleUtterance, amount: recovered });
+      amount = recovered;
+    }
+  }
 
   const draft: Draft = {
     id,
@@ -382,6 +400,8 @@ export function stageIntent(khata: Khata, act: RawAction, id: string, projected?
   // Opening a brand-new khata: there is nobody to resolve, only a name to keep.
   if (draft.kind === 'new_customer' && draft.status !== 'needs_customer') {
     if (!spoken) { draft.status = 'needs_customer'; return draft; }
+    price(draft, 0);
+    draft.amount = amount ?? 0;
     price(draft, 0);
     draft.kind = 'new_customer';
     draft.status = 'ready';
@@ -507,7 +527,7 @@ export function commitDrafts(khata: Khata, drafts: Draft[]): Turn['committed'] {
     cust.balance = deriveBalance(cust.entries);
     khata.audit.push({ ...entry, customer_id: cust.id });
 
-    committed.push({ customer_id: cust.id, name_en: cust.name_en, before, after: cust.balance, amount });
+    committed.push({ customer_id: cust.id, name: cust.name, name_en: cust.name_en, before, after: cust.balance, amount });
   }
   return committed;
 }
@@ -621,11 +641,24 @@ async function extract(transcript: string, khata: Khata, session: Session) {
  * — this function never reads or writes storage, which is what keeps it runnable
  * under Node with no phone attached.
  */
-export async function runTurn(transcript: string, session: Session, khata: Khata): Promise<Turn> {
+export interface TurnOptions {
+  /** Saaras' detected language, so replies can be templated locally. */
+  lang?: string | null;
+  /** Fired as soon as drafts are known — lets the UI paint ~seconds before the voice. */
+  onStaged?: (drafts: Draft[], stage: Stage) => void;
+}
+
+export async function runTurn(
+  transcript: string,
+  session: Session,
+  khata: Khata,
+  opts: TurnOptions = {},
+): Promise<Turn> {
   const t0 = Date.now();
   const stageIn: Stage = session.stage;
   let committed: Turn['committed'] = [];
   const notes: string[] = [];
+  const ctxExtra: Pick<ReplyContext, 'rejected' | 'amended' | 'queries'> = {};
 
   const seq = () => `d${session.drafts.length + 1}_${Date.now().toString(36)}`;
 
@@ -641,12 +674,13 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
       if (a.kind === 'balance_query') {
         const hits = matchCustomers(khata, a.name_spoken);
         const c = hits.length === 1 ? hits[0] : khata.customers.find((x) => x.id === a.customer_id);
+        if (c) (ctxExtra.queries ??= []).push([c.name, c.balance]);
         queries.push(c
           ? `${c.name_en} (${c.name}) currently owes ${c.balance} rupees. Nothing changed — just tell the merchant this balance.`
           : 'You could not tell which customer they asked about. Ask which one.');
         continue;
       }
-      session.drafts.push(stageIntent(khata, a, seq(), projected));
+      session.drafts.push(stageIntent(khata, a, seq(), projected, actions.length === 1 ? text : undefined));
     }
     notes.push(...queries);
   };
@@ -671,6 +705,7 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
           : 'There was nothing left to save. Say so briefly.');
       } else if (decision === 'reject') {
         session.drafts = [];
+        ctxExtra.rejected = true;
         notes.push('The merchant cancelled the pending entries. Nothing was saved. Acknowledge in a few words and invite them to say it again.');
       } else if (decision === 'amend') {
         const patches = calls[0]?.args?.amendments ?? [];
@@ -682,6 +717,7 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
           if (!target) continue;
           amendDraft(khata, target, p);
         }
+        ctxExtra.amended = true;
         notes.push('The merchant CORRECTED a pending entry. It is still NOT saved. Read back the corrected figures and ask them to confirm.');
       } else {
         // They ignored the question and said something else entirely.
@@ -733,6 +769,17 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
 
     case 'awaiting_amount': {
       const focus = session.drafts.find((d) => d.id === session.focus);
+
+      // Read it ourselves first. This was a ~5s model round trip that also failed
+      // intermittently on "दो सौ पचास"; when we can read the number, there is no
+      // reason to ask. The model remains the fallback for odd phrasings.
+      const local = parseAmount(transcript);
+      if (focus && local !== null) {
+        log('amount_local', { transcript, amount: local });
+        amendDraft(khata, focus, { amount: local });
+        break;
+      }
+
       const calls = await chatTools<{ amount?: number; unclear?: boolean }>(
         [
           {
@@ -757,6 +804,11 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
   recompute(session);
   const tRoute = Date.now();
 
+  // The screen can be right long before the voice is. Emitting here means the
+  // ledger and the pending card update while the reply is still being produced,
+  // which removes most of the *felt* wait even when the wait is unchanged.
+  opts.onStaged?.(session.drafts.map((d) => ({ ...d })), session.stage);
+
   // Build the facts. Only our arithmetic gets in here — the model phrases, and
   // phrases only from these lines.
   const factLines = [
@@ -768,7 +820,17 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
   }
   const facts = factLines.join('\n') || 'Nothing is pending. Ask what they would like to record.';
 
-  const reply = await composeReply(facts, transcript, session.drafts.length <= 1 && !notes.length);
+  // Templated locally where we can (see reply.ts): this used to be a second
+  // model call measured at 1.1s-14s, and it is pure phrasing over numbers we
+  // already computed.
+  const templated = templateReply(
+    { drafts: session.drafts, committed, ...ctxExtra },
+    replyLangFor(opts.lang ?? (/[ऀ-ॿ]/.test(transcript) ? 'hi' : 'en')),
+  );
+  const reply = templated
+    ? speechSafe(templated)
+    : await composeReply(facts, transcript, session.drafts.length <= 1 && !notes.length);
+  log('reply_source', { templated: !!templated, chars: reply.length });
 
   // Plain-text history: replaying raw tool_calls would need matching tool-result
   // messages, and the extra protocol surface buys us nothing here.

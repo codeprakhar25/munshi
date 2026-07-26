@@ -177,7 +177,12 @@ export class VoiceSession {
     }
 
     try {
-      const turn = await runTurn(transcript, this.session, this.khata);
+      const turn = await runTurn(transcript, this.session, this.khata, {
+        lang: this.stt?.lang,
+        // Paint the pending card the instant it is known, seconds before the
+        // voice gets there.
+        onStaged: (drafts, stage) => this.cb.onView({ drafts, stage }),
+      });
       const tAgent = Date.now();
 
       // Only a commit changes the ledger; drafts are pending and unsaved.
