@@ -11,7 +11,7 @@ import { useStrings } from '@/lib/i18n';
 import type { DocLanguage } from '@/lib/sarvam/document-intelligence';
 import { runDocumentIntelligence } from '@/lib/sarvam/document-intelligence';
 import { parseBlocksToDrafts } from '@/lib/sarvam/scan-parsing';
-import { Pressable, Text, View } from '@/tw';
+import { Text, View } from '@/tw';
 import { type AppLanguage, useOnboardingStore } from '@/store/onboarding-store';
 import { type ScanEntry, useScanStore } from '@/store/scan-store';
 

@@ -4,24 +4,31 @@
  * colored by mood (listening = leaf green, speaking = saffron, idle/thinking
  * = faint ink breathing). Every loop runs on the UI thread — the JS thread is
  * busy with Saaras/model calls exactly when these need to look alive.
+ *
+ * NOT a Modal on purpose: it renders in-tree over the home screen so the
+ * Munshi face can fly from the FAB up to the center as one continuous object.
+ * (A Modal is a separate native layer — nothing can animate across it.)
  */
 import { useEffect } from 'react';
-import { Image, Modal, StyleSheet, View as RNView } from 'react-native';
+import { BackHandler, Image, Pressable as RNPressable, StyleSheet, View as RNView, useWindowDimensions } from 'react-native';
 import Animated, {
   Easing,
+  FadeIn,
+  FadeOut,
   interpolate,
   useAnimatedStyle,
   useSharedValue,
   withDelay,
   withRepeat,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { Draft } from '@/agent/types';
-import { fadeUp, Gradient, PressScale, softFade, useBreath } from '@/components/ui/motion';
+import { fadeUp, Gradient, PressScale } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
-import { Text, View } from '@/tw';
+import { Text } from '@/tw';
 import type { VoiceState, VoiceView } from '@/voice/session';
 
 interface Props {
@@ -29,9 +36,13 @@ interface Props {
   view: VoiceView;
   onClose: () => void;
   onBargeIn: () => void;
+  /** Distance from the screen bottom to the FAB's center — the fly-in origin. */
+  fabCenterFromBottom?: number;
 }
 
 const STAGE = 300;
+const ORB = 132;
+const FAB = 74;
 
 const MOOD = {
   listening: { ring: 'rgba(21,128,61,0.35)', glow: 'rgba(34,197,94,0.22)', dust: 'rgba(34,197,94,0.4)', period: 2800, stagger: 350 },
@@ -46,11 +57,11 @@ const RING_SIZES = [216, 276, 348, 432, 528];
 function WaveRing({ size, delay, color, period }: { size: number; delay: number; color: string; period: number }) {
   const p = useSharedValue(0);
   useEffect(() => {
-    p.value = 0;
-    p.value = withDelay(
+    p.set(0);
+    p.set(withDelay(
       delay,
       withRepeat(withTiming(1, { duration: period, easing: Easing.bezier(0.22, 0.7, 0.3, 1) }), -1, false),
-    );
+    ));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [delay, period, color]);
   const style = useAnimatedStyle(() => ({
@@ -80,7 +91,7 @@ function WaveRing({ size, delay, color, period }: { size: number; delay: number;
 function BreathRing({ size, delay, tint }: { size: number; delay: number; tint: string }) {
   const p = useSharedValue(0);
   useEffect(() => {
-    p.value = withDelay(delay, withRepeat(withTiming(1, { duration: 4500, easing: Easing.inOut(Easing.sin) }), -1, true));
+    p.set(withDelay(delay, withRepeat(withTiming(1, { duration: 4500, easing: Easing.inOut(Easing.sin) }), -1, true)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [delay]);
   const style = useAnimatedStyle(() => ({
@@ -111,7 +122,7 @@ const DUST = [
 function DustMote({ left, top, delay, size, color }: (typeof DUST)[number] & { color: string }) {
   const p = useSharedValue(0);
   useEffect(() => {
-    p.value = withDelay(delay, withRepeat(withTiming(1, { duration: 1600, easing: Easing.inOut(Easing.sin) }), -1, true));
+    p.set(withDelay(delay, withRepeat(withTiming(1, { duration: 1600, easing: Easing.inOut(Easing.sin) }), -1, true)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [delay]);
   const style = useAnimatedStyle(() => ({
@@ -141,8 +152,8 @@ function DustMote({ left, top, delay, size, color }: (typeof DUST)[number] & { c
 function useBob(active: boolean) {
   const p = useSharedValue(0);
   useEffect(() => {
-    if (active) p.value = withRepeat(withTiming(1, { duration: 800, easing: Easing.inOut(Easing.sin) }), -1, true);
-    else p.value = withTiming(0, { duration: 250 });
+    if (active) p.set(withRepeat(withTiming(1, { duration: 800, easing: Easing.inOut(Easing.sin) }), -1, true));
+    else p.set(withTiming(0, { duration: 250 }));
   }, [active, p]);
   return useAnimatedStyle(() => ({ transform: [{ translateY: -3 * p.value }] }));
 }
@@ -167,76 +178,144 @@ function DraftChip({ d, index }: { d: Draft; index: number }) {
   );
 }
 
-export function VoiceOverlay({ open, view, onClose, onBargeIn }: Props) {
+export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBottom = 65 }: Props) {
   const insets = useSafeAreaInsets();
+  const { height: screenH } = useWindowDimensions();
   const mood = view.state as VoiceState;
   const active: ActiveMood | null = mood === 'listening' || mood === 'speaking' ? mood : null;
   const spec = active ? MOOD[active] : null;
 
-  const glowPulse = useBreath({ peak: 1.12, lo: 0.5, hi: 1, ms: active === 'listening' ? 1400 : 1100 });
   const bob = useBob(mood === 'speaking');
 
-  return (
-    <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
-      <RNView style={[styles.backdrop, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-        {/* Warm glass ambience over the home screen. */}
-        <Gradient
-          pointerEvents="none"
-          image="radial-gradient(circle at 50% 46%, rgba(255,248,235,0.6) 0%, rgba(255,248,235,0) 70%)"
-          style={StyleSheet.absoluteFill}
-        />
+  // Fly-in: the orb starts life exactly where the FAB sits (small, low) and
+  // springs up to the stage center; rings/glow/dust bloom in behind it.
+  const fly = useSharedValue(0);
+  useEffect(() => {
+    if (open) {
+      fly.set(0);
+      fly.set(withSpring(1, { damping: 18, stiffness: 130, mass: 0.9 }));
+    }
+  }, [open, fly]);
 
+  // The overlay is centered on the full screen, so the orb's resting center is
+  // at screenH / 2; the FAB's center is fabCenterFromBottom above the bottom.
+  const startOffsetY = screenH / 2 - fabCenterFromBottom;
+
+  const flyStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: (1 - fly.value) * startOffsetY },
+      { scale: FAB / ORB + (1 - FAB / ORB) * fly.value },
+    ],
+  }));
+  /** Everything except the orb fades/scales in as the face arrives. */
+  const bloomStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(fly.value, [0, 0.6, 1], [0, 0, 1]),
+    transform: [{ scale: 0.92 + 0.08 * fly.value }],
+  }));
+
+  const glowPulse = useSharedValue(0);
+  useEffect(() => {
+    glowPulse.set(withRepeat(withTiming(1, { duration: active === 'listening' ? 1400 : 1100, easing: Easing.inOut(Easing.sin) }), -1, true));
+  }, [active, glowPulse]);
+  const glowStyle = useAnimatedStyle(() => ({
+    opacity: active ? 0.5 + 0.5 * glowPulse.value : 0.4,
+    transform: [{ scale: active ? 1 + 0.12 * glowPulse.value : 1 }],
+  }));
+
+  // No Modal → Android back must close the overlay by hand.
+  useEffect(() => {
+    if (!open) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      onClose();
+      return true;
+    });
+    return () => sub.remove();
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    // The ROOT is the dismiss pressable: any tap that no inner control (orb, ✕)
+    // claims bubbles up here and closes the agent. Ancestor bubbling is
+    // guaranteed by the responder system — sibling fall-through is not.
+    <AnimatedDismiss
+      entering={FadeIn.duration(300)}
+      exiting={FadeOut.duration(220)}
+      onPress={onClose}
+      style={[StyleSheet.absoluteFill, { zIndex: 40 }]}>
+      {/* Frosted wash over the home screen. Real gaussian blur needs expo-blur
+          (native, next rebuild) — this heavy frost is the no-rebuild stand-in. */}
+      <RNView pointerEvents="none" style={styles.frost} />
+      <Gradient
+        pointerEvents="none"
+        image="radial-gradient(circle at 50% 46%, rgba(255,248,235,0.85) 0%, rgba(255,248,235,0) 80%)"
+        style={StyleSheet.absoluteFill}
+      />
+
+      <RNView pointerEvents="box-none" style={[styles.center, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         <PressScale onPress={onClose} scaleTo={0.92} style={[styles.close, { top: insets.top + 10 }]}>
           <Text style={{ fontSize: 16, color: Porcelain.muted }}>✕</Text>
         </PressScale>
 
-        <RNView style={styles.stage}>
-          {/* keyed by mood so ring loops restart in phase on every mood change */}
-          {spec ? (
-            <RNView key={active} style={StyleSheet.absoluteFill} pointerEvents="none">
-              {RING_SIZES.map((size, i) => (
-                <WaveRing key={i} size={size} delay={i * spec.stagger} color={spec.ring} period={spec.period} />
-              ))}
-              {DUST.map((m, i) => (
-                <DustMote key={i} {...m} color={spec.dust} />
-              ))}
-            </RNView>
-          ) : (
-            <RNView style={StyleSheet.absoluteFill} pointerEvents="none">
-              <BreathRing size={RING_SIZES[1]} delay={0} tint={mood === 'thinking' ? 'rgba(217,119,6,0.35)' : 'rgba(28,25,23,0.16)'} />
-              <BreathRing size={RING_SIZES[2]} delay={1200} tint={mood === 'thinking' ? 'rgba(217,119,6,0.22)' : 'rgba(28,25,23,0.1)'} />
-            </RNView>
-          )}
+        {/* box-none: taps between the rings (outside the orb) fall through to the
+            frost layer and close the agent. */}
+        <RNView pointerEvents="box-none" style={styles.stage}>
+          <Animated.View style={[StyleSheet.absoluteFill, bloomStyle]} pointerEvents="none">
+            {/* keyed by mood so ring loops restart in phase on every mood change */}
+            {spec ? (
+              <RNView key={active} style={StyleSheet.absoluteFill}>
+                {RING_SIZES.map((size, i) => (
+                  <WaveRing key={i} size={size} delay={i * spec.stagger} color={spec.ring} period={spec.period} />
+                ))}
+                {DUST.map((m, i) => (
+                  <DustMote key={i} {...m} color={spec.dust} />
+                ))}
+              </RNView>
+            ) : (
+              <RNView style={StyleSheet.absoluteFill}>
+                <BreathRing size={RING_SIZES[1]} delay={0} tint={mood === 'thinking' ? 'rgba(217,119,6,0.35)' : 'rgba(28,25,23,0.16)'} />
+                <BreathRing size={RING_SIZES[2]} delay={1200} tint={mood === 'thinking' ? 'rgba(217,119,6,0.22)' : 'rgba(28,25,23,0.1)'} />
+              </RNView>
+            )}
 
-          {/* Glow halo behind the orb. */}
-          <Animated.View pointerEvents="none" style={[styles.glow, active ? glowPulse : { opacity: 0.4 }]}>
-            <Gradient
-              image={`radial-gradient(circle at 50% 50%, ${spec?.glow ?? 'rgba(245,158,11,0.14)'} 0%, rgba(245,158,11,0) 68%)`}
-              style={StyleSheet.absoluteFill}
-            />
+            {/* Glow halo behind the orb. */}
+            <Animated.View style={[styles.glow, glowStyle]}>
+              <Gradient
+                image={`radial-gradient(circle at 50% 50%, ${spec?.glow ?? 'rgba(245,158,11,0.14)'} 0%, rgba(245,158,11,0) 68%)`}
+                style={StyleSheet.absoluteFill}
+              />
+            </Animated.View>
           </Animated.View>
 
-          <Animated.View entering={softFade()} style={bob}>
-            <PressScale scaleTo={0.96} onPress={onBargeIn} style={styles.orb}>
-              <Image source={require('../../../assets/images/munshi-face.png')} style={styles.face} />
-            </PressScale>
+          <Animated.View style={flyStyle}>
+            <Animated.View style={bob}>
+              <PressScale scaleTo={0.96} onPress={onBargeIn} style={styles.orb}>
+                <Image source={require('../../../assets/images/munshi-face.png')} style={styles.face} />
+              </PressScale>
+            </Animated.View>
           </Animated.View>
         </RNView>
 
+        {/* Session cards — one appears for each entry as you speak. */}
         <RNView style={styles.session} pointerEvents="none">
           {view.drafts.slice(-4).map((d, i) => (
             <DraftChip key={d.id} d={d} index={i} />
           ))}
         </RNView>
       </RNView>
-    </Modal>
+    </AnimatedDismiss>
   );
 }
 
+const AnimatedDismiss = Animated.createAnimatedComponent(RNPressable);
+
 const styles = StyleSheet.create({
-  backdrop: {
+  frost: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(251,249,246,0.94)',
+  },
+  center: {
     flex: 1,
-    backgroundColor: 'rgba(251,249,246,0.32)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -247,7 +326,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.6)',
+    backgroundColor: 'rgba(255,255,255,0.7)',
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#1c1917',
@@ -272,12 +351,13 @@ const styles = StyleSheet.create({
     height: 190,
     borderRadius: 95,
     overflow: 'hidden',
-    alignSelf: 'center',
+    top: (STAGE - 190) / 2,
+    left: (STAGE - 190) / 2,
   },
   orb: {
-    width: 132,
-    height: 132,
-    borderRadius: 66,
+    width: ORB,
+    height: ORB,
+    borderRadius: ORB / 2,
     overflow: 'hidden',
     borderWidth: 3,
     borderColor: 'rgba(255,255,255,0.75)',
@@ -306,7 +386,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.85)',
+    backgroundColor: 'rgba(255,255,255,0.9)',
     borderWidth: 1,
     borderColor: 'rgba(28,25,23,0.06)',
     maxWidth: '100%',

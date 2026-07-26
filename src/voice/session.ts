@@ -44,6 +44,8 @@ export class VoiceSession {
   private busy = false;
   private listening = false;
   private releasedAt = 0;
+  /** Set from the onboarding store; the language replies default to. */
+  appLang = 'hi';
 
   constructor(private khata: Khata, private readonly cb: VoiceCallbacks) {
     this.audio = new VoiceAudio({
@@ -227,6 +229,7 @@ export class VoiceSession {
     try {
       const turn = await runTurn(transcript, this.session, this.khata, {
         lang: this.stt?.lang,
+        appLang: this.appLang,
         // Paint the pending card the instant it is known, seconds before the
         // voice gets there.
         onStaged: (drafts, stage) => this.cb.onView({ drafts, stage }),

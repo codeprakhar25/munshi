@@ -50,26 +50,34 @@ interface PressScaleProps extends PressableProps {
   children?: React.ReactNode;
 }
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
 /**
  * The mock's `:active { transform: scale(0.985) }` — a springy press
  * acknowledgment on anything tappable.
+ *
+ * ONE node, not a Pressable wrapping a styled view: the style (including any
+ * `position: absolute`) must live on the Pressable itself, or its hit box is
+ * zero-sized and Android — which never hit-tests children outside the parent's
+ * bounds — makes the control untappable.
  */
 export function PressScale({ scaleTo = 0.97, style, children, ...press }: PressScaleProps) {
   const scale = useSharedValue(1);
   const animated = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
   return (
-    <Pressable
+    <AnimatedPressable
       {...press}
+      style={[style, animated]}
       onPressIn={(e) => {
-        scale.value = withSpring(scaleTo, { damping: 20, stiffness: 400 });
+        scale.set(withSpring(scaleTo, { damping: 20, stiffness: 400 }));
         press.onPressIn?.(e);
       }}
       onPressOut={(e) => {
-        scale.value = withSpring(1, { damping: 16, stiffness: 300 });
+        scale.set(withSpring(1, { damping: 16, stiffness: 300 }));
         press.onPressOut?.(e);
       }}>
-      <Animated.View style={[style, animated]}>{children}</Animated.View>
-    </Pressable>
+      {children}
+    </AnimatedPressable>
   );
 }
 

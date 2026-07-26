@@ -674,8 +674,10 @@ async function extract(transcript: string, khata: Khata, session: Session) {
  * under Node with no phone attached.
  */
 export interface TurnOptions {
-  /** Saaras' detected language, so replies can be templated locally. */
+  /** Saaras' detected language for this utterance. */
   lang?: string | null;
+  /** The language the merchant chose at onboarding — the default to answer in. */
+  appLang?: string | null;
   /** Fired as soon as drafts are known — lets the UI paint ~seconds before the voice. */
   onStaged?: (drafts: Draft[], stage: Stage) => void;
 }
@@ -857,7 +859,7 @@ export async function runTurn(
   // already computed.
   const templated = templateReply(
     { drafts: session.drafts, committed, ...ctxExtra },
-    replyLangFor(opts.lang ?? (/[ऀ-ॿ]/.test(transcript) ? 'hi' : 'en')),
+    replyLangFor(opts.appLang ?? 'hi', transcript, opts.lang),
   );
   const reply = templated
     ? speechSafe(templated)

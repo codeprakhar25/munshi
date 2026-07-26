@@ -12,7 +12,7 @@ import { loadKhata } from '@/db/khata';
 import { commitScanDrafts } from '@/lib/khata-sync';
 import { useStrings } from '@/lib/i18n';
 import { extractNameToken, findMatches } from '@/lib/matching';
-import { Pressable, ScrollView, Text, View } from '@/tw';
+import { ScrollView, Text, View } from '@/tw';
 import { useDeviceContactsStore } from '@/store/device-contacts-store';
 import { useOnboardingStore } from '@/store/onboarding-store';
 import { usePeopleStore } from '@/store/people-store';

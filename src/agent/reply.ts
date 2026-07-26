@@ -19,12 +19,44 @@ import type { Draft, Turn } from './types';
 /** Which template set to use. Anything else falls through to the model. */
 export type ReplyLang = 'hi' | 'en';
 
-export const replyLangFor = (code: string | null | undefined): ReplyLang | null => {
-  if (!code) return null;
-  if (code.startsWith('hi')) return 'hi';
-  if (code.startsWith('en')) return 'en';
-  return null; // Marathi, Tamil, Bengali… -> let the model phrase it
-};
+/**
+ * Hindi function words that survive romanisation. Hinglish — "Gopal ne paanch
+ * sau diye" — is Latin script, so a script test alone calls it English and the
+ * merchant who picked Hindi gets answered in English.
+ */
+const HINGLISH = /\b(ne|ko|ka|ki|ke|se|diye|diya|liya|le|hai|hain|nahi|nahin|haan|kitna|kitne|baaki|udhaar|udhar|rupaye|rupaiya|sau|hazaar|paise|wala|wale)\b/i;
+
+/**
+ * Which language to answer in: **the one they just spoke**.
+ *
+ * The bug this exists to fix is Hinglish. "Gopal ne paanch sau diye" is Latin
+ * script, so a script test alone calls it English and answers a Hindi speaker in
+ * English — and Saaras itself reports en-IN for plenty of Hinglish, so its
+ * detection cannot be trusted alone either. Romanised Hindi function words are
+ * the reliable signal.
+ *
+ * The configured app language is only a last resort, for when the utterance
+ * carries no signal at all (a bare "haan", a number on its own).
+ */
+export function replyLangFor(
+  appLang: string | null | undefined,
+  transcript?: string,
+  detected?: string | null,
+): ReplyLang | null {
+  if (transcript) {
+    if (/[ऀ-ॿ]/.test(transcript)) return 'hi';        // spoken Hindi, Devanagari
+    if (HINGLISH.test(transcript)) return 'hi';        // spoken Hindi, romanised
+    if (/[a-z]/i.test(transcript)) return 'en';        // genuinely English
+  }
+
+  if (detected?.startsWith('hi')) return 'hi';
+  if (detected?.startsWith('en')) return 'en';
+
+  // Nothing to go on — fall back to what they configured.
+  if (appLang?.startsWith('hi')) return 'hi';
+  if (appLang?.startsWith('en')) return 'en';
+  return null; // Marathi, Tamil… -> let the model phrase it
+}
 
 const rupees = (n: number, l: ReplyLang) =>
   n < 0

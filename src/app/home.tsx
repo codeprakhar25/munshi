@@ -66,8 +66,11 @@ export default function HomeScreen() {
 
   const closeVoice = useCallback(async () => {
     await voice.current?.stopConversation();
+    // Reset the conversation so the next tap starts a fresh session — pending
+    // (unconfirmed) drafts die with the overlay, exactly like the mock.
+    voice.current?.resetConversation();
     setVoiceOpen(false);
-    setView((v) => ({ ...v, state: 'idle', heard: '', drafts: v.drafts }));
+    setView({ state: 'idle', heard: '', reply: '', stage: 'idle', drafts: [], error: null });
   }, []);
 
   const due = khata ? totalDue(khata) : 0;
@@ -204,35 +207,41 @@ export default function HomeScreen() {
         )}
       </ScrollView>
 
-      <Text
-        className="absolute bottom-28 self-center text-xs font-bold uppercase tracking-widest text-muted"
-        style={{ fontFamily: AppFonts.displayBold }}>
-        {t.talkMunshi}
-      </Text>
+      {/* FAB leaves the bottom while the overlay is up — the flying orb IS the face. */}
+      {!voiceOpen && (
+        <>
+          <Text
+            className="absolute bottom-28 self-center text-xs font-bold uppercase tracking-widest text-muted"
+            style={{ fontFamily: AppFonts.displayBold }}>
+            {t.talkMunshi}
+          </Text>
 
-      {/* Munshi FAB — breathing saffron halo behind, warm gradient wash over the face. */}
-      <RNView pointerEvents="box-none" style={styles.fabWrap}>
-        <Animated.View pointerEvents="none" style={[styles.fabHalo, fabHalo]}>
-          <Gradient
-            image="radial-gradient(circle at 50% 50%, rgba(245,158,11,0.4) 0%, rgba(245,158,11,0) 70%)"
-            style={StyleSheet.absoluteFill}
-          />
-        </Animated.View>
-        <PressScale scaleTo={0.94} onPress={openVoice} style={styles.fab}>
-          <Image source={require('../../assets/images/munshi-face.png')} style={{ width: '100%', height: '100%' }} />
-          <Gradient
-            pointerEvents="none"
-            image="linear-gradient(180deg, rgba(217,119,6,0) 45%, rgba(217,119,6,0.35) 100%)"
-            style={StyleSheet.absoluteFill}
-          />
-        </PressScale>
-      </RNView>
+          {/* Munshi FAB — breathing saffron halo behind, warm gradient wash over the face. */}
+          <RNView pointerEvents="box-none" style={styles.fabWrap}>
+            <Animated.View pointerEvents="none" style={[styles.fabHalo, fabHalo]}>
+              <Gradient
+                image="radial-gradient(circle at 50% 50%, rgba(245,158,11,0.4) 0%, rgba(245,158,11,0) 70%)"
+                style={StyleSheet.absoluteFill}
+              />
+            </Animated.View>
+            <PressScale scaleTo={0.94} onPress={openVoice} style={styles.fab}>
+              <Image source={require('../../assets/images/munshi-face.png')} style={{ width: '100%', height: '100%' }} />
+              <Gradient
+                pointerEvents="none"
+                image="linear-gradient(180deg, rgba(217,119,6,0) 45%, rgba(217,119,6,0.35) 100%)"
+                style={StyleSheet.absoluteFill}
+              />
+            </PressScale>
+          </RNView>
+        </>
+      )}
 
       <VoiceOverlay
         open={voiceOpen}
         view={view}
         onClose={closeVoice}
         onBargeIn={() => void voice.current?.bargeIn()}
+        fabCenterFromBottom={28 + 37}
       />
       <PersonSheet customer={person} onClose={() => setPerson(null)} />
     </SafeAreaView>
