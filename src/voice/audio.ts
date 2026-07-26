@@ -12,11 +12,18 @@
  */
 import { AudioContext, AudioManager, AudioRecorder } from 'react-native-audio-api';
 
+import { log } from '@/agent/sarvam';
 import { bytesToBase64, floatToPcm16, pcm16ToFloat } from '@/voice/base64';
 import { JitterBuffer } from '@/voice/jitter';
 
 /** Saaras accepts 16kHz PCM16 and nothing else. */
 export const MIC_RATE = 16000;
+/**
+ * Bulbul rejects anything outside {8000, 16000, 22050, 24000} with a 400 — so the
+ * "match the device's native rate" idea does not survive contact: phones report
+ * 48000. 24000 is the best it offers, and the platform resamples on output.
+ */
+export const TTS_RATE = 24000;
 /** 100ms per frame, same cadence the POC's AudioWorklet posted at. */
 const MIC_FRAME = 1600;
 /** How long after playback ends before the mic is trusted again. */
@@ -33,17 +40,22 @@ export class VoiceAudio {
   private ctx: AudioContext | null = null;
   private jitter: JitterBuffer | null = null;
   private gateTimer: ReturnType<typeof setTimeout> | null = null;
+  private frames = 0;
+  private gated = 0;
 
   /** False while the agent is speaking — see the half-duplex note above. */
   private transmit = true;
   private recording = false;
 
   readonly playbackRate: number;
+  readonly deviceRate: number;
 
   constructor(private readonly h: AudioHandlers) {
-    // Ask the device what it actually wants, rather than forcing 22050 and
-    // pushing a resample into the graph on every Android device.
-    this.playbackRate = AudioManager.getDevicePreferredSampleRate() || 48000;
+    // Bulbul caps at 24kHz, so the graph runs at whatever Bulbul can actually
+    // synthesise. Reported here for the record; see TTS_RATE above.
+    this.deviceRate = AudioManager.getDevicePreferredSampleRate() || 48000;
+    this.playbackRate = TTS_RATE;
+    log('audio_rates', { device: this.deviceRate, playback: this.playbackRate, mic: MIC_RATE });
   }
 
   // ------------------------------------------------------------ session ----
@@ -51,6 +63,7 @@ export class VoiceAudio {
   async prepare(): Promise<boolean> {
     try {
       const status = await AudioManager.requestRecordingPermissions();
+      log('mic_permission', { status });
       if (status !== 'Granted') {
         this.h.onError?.('Microphone permission denied');
         return false;
@@ -80,22 +93,30 @@ export class VoiceAudio {
 
     rec.onAudioReady({ sampleRate: MIC_RATE, bufferLength: MIC_FRAME, channelCount: 1 }, (ev) => {
       // Dropped, never buffered: a queued frame would be echo arriving late.
-      if (!this.transmit) return;
+      if (!this.transmit) { this.gated++; return; }
       try {
         const pcm = ev.buffer.getChannelData(0);
+        // Peak level, so a silent/dead mic is distinguishable from a broken socket.
+        let peak = 0;
+        for (let i = 0; i < pcm.length; i++) { const a = pcm[i] < 0 ? -pcm[i] : pcm[i]; if (a > peak) peak = a; }
+        if (this.frames % 10 === 0) log('mic_frame', { n: this.frames, samples: pcm.length, peak: Number(peak.toFixed(3)) });
+        this.frames++;
         this.h.onFrame(bytesToBase64(floatToPcm16(pcm)));
       } catch (e) {
         this.h.onError?.(e instanceof Error ? e.message : 'mic frame failed');
       }
     });
 
-    await rec.start();
+    const started = await rec.start();
     this.recording = true;
+    log('mic_start', { rate: MIC_RATE, frame: MIC_FRAME, playbackRate: this.playbackRate, started });
+    this.frames = 0;
   }
 
   async stopMic(): Promise<void> {
     if (!this.recording) return;
     this.recording = false;
+    log('mic_stop', { frames: this.frames, gated: this.gated });
     try {
       this.recorder?.clearOnAudioReady();
       await this.recorder?.stop();
@@ -160,7 +181,10 @@ export class VoiceAudio {
     this.setTransmit(true);
   }
 
-  setTransmit(on: boolean): void { this.transmit = on; }
+  setTransmit(on: boolean): void {
+    if (this.transmit !== on) log('mic_gate', { open: on });
+    this.transmit = on;
+  }
   get jitterStats() { return this.jitter?.stats ?? null; }
 
   async dispose(): Promise<void> {

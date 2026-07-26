@@ -86,7 +86,12 @@ export class VoiceSession {
       this.stt = new SttSocket({
         onOpen: () => this.cb.onView({ state: 'listening', error: null }),
         onPartial: (text) => this.cb.onView({ heard: text }),
-        onSpeechEnd: () => this.arm(),
+        // Saaras emits END_SPEECH at any natural pause — mid-sentence, while the
+        // merchant is still holding the button and still talking. Acting on it
+        // starts a turn, and starting a turn closes the mic gate, so the rest of
+        // what they say is dropped. In hold-to-talk the RELEASE is the end of the
+        // turn and nothing else is; keep the signal only for the hands-free mode.
+        onSpeechEnd: () => { if (!this.held) this.arm(); },
         onError: (msg) => this.cb.onView({ error: msg }),
         onClose: () => this.cb.onView({ state: 'idle' }),
       });
@@ -123,7 +128,13 @@ export class VoiceSession {
     // has said since, and they would just see themselves being ignored.
     if (this.busy) return;
     const text = this.stt?.take() ?? '';
-    if (!text) return;
+    if (!text) {
+      // Released without Saaras hearing anything. Without this the button stays
+      // green and the status reads "listening" forever, so the merchant thinks
+      // the phone is still recording them.
+      if (!this.held) this.cb.onView({ state: 'idle' });
+      return;
+    }
     await this.turn(text, true);
   }
 

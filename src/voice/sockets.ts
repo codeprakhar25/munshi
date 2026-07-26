@@ -49,11 +49,12 @@ export class SttSocket {
     const ws = open(`${STT_WS}?${q}`);
     this.ws = ws;
 
-    ws.onopen = () => this.h.onOpen?.();
+    ws.onopen = () => { log('stt_open', { url: STT_WS, keyLen: KEY.length }); this.h.onOpen?.(); };
     ws.onmessage = (ev: WebSocketMessageEvent) => {
       let m: any;
       try { m = JSON.parse(String(ev.data)); } catch { return; }
 
+      log('stt_msg', { type: m.type, sig: m.data?.signal_type, transcript: m.data?.transcript });
       if (m.type === 'data' && m.data?.transcript?.trim()) {
         this.parts.push(m.data.transcript.trim());
         if (m.data.language_code) this.lang = m.data.language_code;
@@ -72,12 +73,17 @@ export class SttSocket {
       log('stt_ws_error', { msg: String((e as any)?.message ?? e) });
       this.h.onError?.('speech connection failed');
     };
-    ws.onclose = () => { this.ws = null; this.h.onClose?.(); };
+    ws.onclose = (e: WebSocketCloseEvent) => { log('stt_close', { code: e?.code, reason: e?.reason }); this.ws = null; this.h.onClose?.(); };
   }
 
   /** base64 PCM16 @16kHz, exactly what the recorder produces. */
+  sent = 0;
   send(b64: string): void {
-    if (this.ws?.readyState !== 1) return;
+    if (this.ws?.readyState !== 1) {
+      if (this.sent === 0) log('stt_send_dropped', { readyState: this.ws?.readyState ?? 'no socket' });
+      return;
+    }
+    this.sent++;
     this.ws.send(JSON.stringify({ audio: { data: b64, sample_rate: '16000', encoding: 'audio/wav' } }));
   }
 

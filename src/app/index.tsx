@@ -36,8 +36,10 @@ export default function Home() {
 
   useEffect(() => {
     let alive = true;
+    console.log('[munshi] boot: mounting, loading khata');
     void (async () => {
       const k = await loadKhata();
+      console.log('[munshi] boot: khata loaded,', k.customers.length, 'customers');
       if (!alive) return;
       setKhata(k);
       voice.current = new VoiceSession(k, {
@@ -152,8 +154,8 @@ export default function Home() {
         </View>
 
         <Pressable
-          onPressIn={() => void voice.current?.press()}
-          onPressOut={() => void voice.current?.release()}
+          onPressIn={() => { console.log('[munshi] mic PRESS'); void voice.current?.press(); }}
+          onPressOut={() => { console.log('[munshi] mic RELEASE'); void voice.current?.release(); }}
           disabled={busy}
           className={`items-center rounded-full py-4 ${
             view.state === 'listening' ? 'bg-green-600' : busy ? 'bg-neutral-400' : 'bg-teal-700'

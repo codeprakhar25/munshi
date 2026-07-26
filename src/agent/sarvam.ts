@@ -41,8 +41,17 @@ export interface LogRow {
 const RING: LogRow[] = [];
 const RING_MAX = 400;
 
-/** The Node harness points this at a file; the app leaves it on the console. */
-export let sink: ((row: LogRow) => void) | null = null;
+/**
+ * Defaults to the console so the app is debuggable at all — on device this is
+ * the only way any of this traffic reaches logcat. The Node harness replaces it
+ * with a file writer. Leaving it null means a silent app and blind debugging.
+ */
+const consoleSink = (row: LogRow) => {
+  const body = typeof row.payload === 'string' ? row.payload : JSON.stringify(row.payload);
+  console.log(`[sarvam] ${row.kind} ${body.slice(0, 600)}`);
+};
+
+export let sink: ((row: LogRow) => void) | null = consoleSink;
 export const setSink = (fn: ((row: LogRow) => void) | null) => { sink = fn; };
 
 export function log(kind: string, payload: unknown): void {
