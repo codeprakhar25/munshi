@@ -115,6 +115,7 @@ interface ChatResponse {
       tool_calls?: { function: { name: string; arguments: string } }[];
     };
   }[];
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 }
 
 export interface ChatOptions {
@@ -122,6 +123,8 @@ export interface ChatOptions {
   temperature?: number;
   max_tokens?: number;
   tool_choice?: ToolChoice;
+  /** Shows up in llm_timing so you can tell which call is slow. */
+  label?: string;
 }
 
 /**
@@ -136,12 +139,24 @@ export interface ChatOptions {
 export async function chatTools<A = Record<string, unknown>>(
   messages: ChatMessage[],
   tools: ToolSchema[],
-  { model = 'sarvam-30b', temperature = 0, max_tokens = 900, tool_choice = 'auto' }: ChatOptions = {},
+  { model = 'sarvam-30b', temperature = 0, max_tokens = 900, tool_choice = 'auto', label = 'chat' }: ChatOptions = {},
 ): Promise<ToolCall<A>[]> {
+  const t0 = Date.now();
   const data = await post<ChatResponse>('/v1/chat/completions', {
     model, messages, tools, tool_choice, temperature, max_tokens,
   });
   const msg = data?.choices?.[0]?.message;
+  // Reasoning length is the dial that actually moves latency on these models —
+  // they think in hidden tokens you pay wall-clock for but never see.
+  log('llm_timing', {
+    label,
+    ms: Date.now() - t0,
+    prompt_chars: messages.reduce((n, m) => n + m.content.length, 0),
+    reasoning_chars: (msg?.reasoning_content ?? '').length,
+    prompt_tokens: data?.usage?.prompt_tokens,
+    completion_tokens: data?.usage?.completion_tokens,
+    finish: data?.choices?.[0]?.finish_reason,
+  });
   const calls = msg?.tool_calls ?? [];
   if (!calls.length) {
     log('no_tool_call', {

@@ -114,7 +114,12 @@ export class TtsSocket {
   constructor(private readonly h: TtsHandlers) {}
 
   /** `sampleRate` should be the device's native rate — see ARCHITECTURE.md §5. */
-  warm(langCode: string, sampleRate: number, speaker = 'priya'): void {
+  /**
+   * `neha` — "warm female, conversational" on the v3 roster. The previous default
+   * `priya` is documented as "good for product / IVR", which is precisely why it
+   * reads as mechanical: it is an IVR voice.
+   */
+  warm(langCode: string, sampleRate: number, speaker = 'neha'): void {
     // Defaults to bulbul:v2; v3 must be asked for explicitly, and the docs'
     // example speaker `anushka` is a v2 voice that mismatches v3.
     const ws = open(`${TTS_WS}?model=bulbul:v3&send_completion_event=true`);

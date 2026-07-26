@@ -154,15 +154,19 @@ export default function Home() {
         </View>
 
         <Pressable
-          onPressIn={() => { console.log('[munshi] mic PRESS'); void voice.current?.press(); }}
-          onPressOut={() => { console.log('[munshi] mic RELEASE'); void voice.current?.release(); }}
-          disabled={busy}
+          onPress={() => { console.log('[munshi] mic TAP'); void voice.current?.toggle(); }}
           className={`items-center rounded-full py-4 ${
-            view.state === 'listening' ? 'bg-green-600' : busy ? 'bg-neutral-400' : 'bg-teal-700'
+            view.state === 'listening' ? 'bg-green-600'
+              : view.state === 'thinking' ? 'bg-amber-600'
+              : view.state === 'speaking' ? 'bg-blue-600'
+              : 'bg-teal-700'
           }`}
         >
           <Text className="text-base font-bold text-white">
-            {view.state === 'listening' ? 'सुन रहा हूँ — छोड़ें' : 'दबाकर बोलें'}
+            {view.state === 'listening' ? 'सुन रहा हूँ · रोकने के लिए टैप करें'
+              : view.state === 'thinking' ? 'समझ रहा हूँ…'
+              : view.state === 'speaking' ? 'बोल रहा हूँ…'
+              : 'टैप करके बोलें'}
           </Text>
         </Pressable>
       </View>

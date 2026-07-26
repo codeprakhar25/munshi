@@ -575,6 +575,7 @@ async function composeReply(facts: string, transcript: string, terse: boolean): 
     tool_choice: { type: 'function', function: { name: 'say' } },
     temperature: 0.4,
     max_tokens: 900,
+    label: 'phrase',
   });
   // Silence is the one unacceptable reply — the merchant is left wondering
   // whether the phone heard them at all.
@@ -609,6 +610,7 @@ async function extract(transcript: string, khata: Khata, session: Session) {
     // we don't want an actions array: `unclear` already covers "couldn't parse it".
     tool_choice: { type: 'function', function: { name: 'apply_ledger_actions' } },
     max_tokens: 1500,
+    label: 'extract',
   });
   const actions = calls[0]?.args?.actions;
   return Array.isArray(actions) && actions.length ? actions : [{ kind: 'unclear', missing: 'meaning' } as RawAction];
@@ -657,7 +659,7 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
           { role: 'user', content: transcript },
         ],
         RESOLVE_TOOL,
-        { tool_choice: { type: 'function', function: { name: 'resolve_draft' } }, max_tokens: 900 },
+        { tool_choice: { type: 'function', function: { name: 'resolve_draft' } }, max_tokens: 900, label: 'resolve' },
       );
       const decision = calls[0]?.args?.decision ?? 'new_command';
 
@@ -702,7 +704,7 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
           { role: 'user', content: transcript },
         ],
         PICK_TOOL,
-        { tool_choice: { type: 'function', function: { name: 'pick_person' } }, max_tokens: 600 },
+        { tool_choice: { type: 'function', function: { name: 'pick_person' } }, max_tokens: 600, label: 'pick' },
       );
       const a = calls[0]?.args ?? {};
       if (focus && a.choice === 'existing') {
@@ -740,7 +742,7 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
           { role: 'user', content: transcript },
         ],
         AMOUNT_TOOL,
-        { tool_choice: { type: 'function', function: { name: 'supply_amount' } }, max_tokens: 400 },
+        { tool_choice: { type: 'function', function: { name: 'supply_amount' } }, max_tokens: 400, label: 'amount' },
       );
       const amt = Number(calls[0]?.args?.amount);
       if (focus && Number.isFinite(amt) && amt > 0) amendDraft(khata, focus, { amount: amt });

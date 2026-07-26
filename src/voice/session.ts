@@ -43,7 +43,8 @@ export class VoiceSession {
   /** Held on the instance so dispose() can close a reply that is still streaming. */
   private tts: TtsSocket | null = null;
   private busy = false;
-  private held = false;
+  private listening = false;
+  private releasedAt = 0;
 
   constructor(private khata: Khata, private readonly cb: VoiceCallbacks) {
     this.audio = new VoiceAudio({
@@ -61,39 +62,40 @@ export class VoiceSession {
     this.cb.onView({ stage: 'idle', drafts: [], heard: '', reply: '' });
   }
 
-  // ------------------------------------------------------- hold to talk ----
+  // ----------------------------------------------------------- tap to talk ----
 
   /**
-   * Press. Hold-to-talk is the primary defence against the agent hearing itself
-   * (ARCHITECTURE.md §5) — the mic simply is not open unless a finger is down.
+   * TAP to start, tap to stop. Between those, the mic stays open and Saaras'
+   * own END_SPEECH decides when a sentence finished — so a follow-up ("हाँ")
+   * needs no second tap, which is what makes a confirm-and-commit exchange feel
+   * like a conversation rather than a form.
+   *
+   * The echo defence is now entirely the half-duplex gate (ARCHITECTURE.md §5),
+   * since there is no finger-down window to lean on: frames are dropped while
+   * the agent is speaking and for 250ms after it has finished playing out.
    */
-  async press(): Promise<void> {
-    if (this.busy || this.held) return;
-    this.held = true;
+  async toggle(): Promise<void> {
+    if (this.listening) { await this.stop(); return; }
+    await this.start();
+  }
+
+  async start(): Promise<void> {
+    if (this.listening) return;
 
     const ok = await this.audio.prepare();
-    if (!ok) { this.held = false; return; }
+    if (!ok) return;
 
-    // A quick tap can release BEFORE prepare() resolves. Without this check the
-    // mic would open with no finger down and no pending release to close it —
-    // which is precisely the guarantee hold-to-talk exists to provide.
-    if (!this.held) return;
-
-    // Cut any playback the moment they start talking over it.
+    this.listening = true;
     this.audio.stopPlayback();
 
     if (!this.stt?.live) {
       this.stt = new SttSocket({
         onOpen: () => this.cb.onView({ state: 'listening', error: null }),
         onPartial: (text) => this.cb.onView({ heard: text }),
-        // Saaras emits END_SPEECH at any natural pause — mid-sentence, while the
-        // merchant is still holding the button and still talking. Acting on it
-        // starts a turn, and starting a turn closes the mic gate, so the rest of
-        // what they say is dropped. In hold-to-talk the RELEASE is the end of the
-        // turn and nothing else is; keep the signal only for the hands-free mode.
-        onSpeechEnd: () => { if (!this.held) this.arm(); },
+        // In tap mode this IS the end of turn — the merchant never signals it.
+        onSpeechEnd: () => { this.releasedAt = Date.now(); this.arm(); },
         onError: (msg) => this.cb.onView({ error: msg }),
-        onClose: () => this.cb.onView({ state: 'idle' }),
+        onClose: () => { if (this.listening) this.cb.onView({ state: 'idle' }); },
       });
       this.stt.connect();
     }
@@ -101,13 +103,17 @@ export class VoiceSession {
     await this.audio.startMic();
   }
 
-  /** Release. Give Saaras a beat to deliver its tail, then run the turn. */
-  async release(): Promise<void> {
-    if (!this.held) return;
-    this.held = false;
+  async stop(): Promise<void> {
+    if (!this.listening) return;
+    this.listening = false;
+    if (this.endTimer) clearTimeout(this.endTimer);
     await this.audio.stopMic();
-    this.arm();
+    this.stt?.close();
+    this.stt = null;
+    this.cb.onView({ state: 'idle' });
   }
+
+  get isListening(): boolean { return this.listening; }
 
   private arm(): void {
     if (this.endTimer) clearTimeout(this.endTimer);
@@ -132,7 +138,7 @@ export class VoiceSession {
       // Released without Saaras hearing anything. Without this the button stays
       // green and the status reads "listening" forever, so the merchant thinks
       // the phone is still recording them.
-      if (!this.held) this.cb.onView({ state: 'idle' });
+      if (!this.listening) this.cb.onView({ state: 'idle' });
       return;
     }
     await this.turn(text, true);
@@ -140,6 +146,11 @@ export class VoiceSession {
 
   private async turn(transcript: string, speak: boolean): Promise<void> {
     this.busy = true;
+    const t0 = Date.now();
+    // Everything downstream is measured against release, not against this point,
+    // because the END_SILENCE_MS debounce is dead air the merchant feels too.
+    const sinceRelease = this.releasedAt ? t0 - this.releasedAt : null;
+    let firstAudioAt = 0;
     this.cb.onView({ state: 'thinking', heard: transcript, error: null });
 
     // Open Bulbul NOW, in parallel with the model calls, so the handshake and
@@ -148,7 +159,17 @@ export class VoiceSession {
     if (speak) {
       this.audio.beginSpeaking();
       tts = this.tts = new TtsSocket({
-        onAudio: (bytes) => this.audio.pushAudio(bytes),
+        onAudio: (bytes) => {
+          if (!firstAudioAt) {
+            firstAudioAt = Date.now();
+            log('latency_first_audio', {
+              // The number that matters: silence the merchant sits through.
+              from_release_ms: this.releasedAt ? firstAudioAt - this.releasedAt : null,
+              from_turn_ms: firstAudioAt - t0,
+            });
+          }
+          this.audio.pushAudio(bytes);
+        },
         onDone: () => this.audio.endSpeaking(),
         onError: (msg) => this.cb.onView({ error: msg }),
       });
@@ -157,6 +178,7 @@ export class VoiceSession {
 
     try {
       const turn = await runTurn(transcript, this.session, this.khata);
+      const tAgent = Date.now();
 
       // Only a commit changes the ledger; drafts are pending and unsaved.
       if (turn.wrote) {
@@ -167,7 +189,18 @@ export class VoiceSession {
 
       if (tts) {
         this.cb.onView({ state: 'speaking' });
+        const tSpeak = Date.now();
         await tts.speak(turn.reply);
+        log('latency_turn', {
+          debounce_ms: sinceRelease,
+          route_ms: turn.timings.route_ms,
+          phrase_ms: turn.timings.compose_ms,
+          agent_ms: tAgent - t0,
+          tts_wait_ms: firstAudioAt ? firstAudioAt - tSpeak : null,
+          to_first_audio_ms: firstAudioAt && this.releasedAt ? firstAudioAt - this.releasedAt : null,
+          reply_chars: turn.reply.length,
+          jitter: this.audio.jitterStats,
+        });
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'turn failed';
@@ -178,11 +211,13 @@ export class VoiceSession {
     } finally {
       if (this.tts === tts) this.tts = null;
       this.busy = false;
-      this.cb.onView({ state: this.held ? 'listening' : 'idle' });
+      // Straight back to listening, so the merchant can just answer.
+      this.cb.onView({ state: this.listening ? 'listening' : 'idle' });
     }
   }
 
   async dispose(): Promise<void> {
+    this.listening = false;
     if (this.endTimer) clearTimeout(this.endTimer);
     this.stt?.close();
     // Without this, unmounting mid-reply leaves Bulbul streaming to nobody until
