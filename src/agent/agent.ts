@@ -1,0 +1,749 @@
+/**
+ * The agent. Sarvam has no orchestration primitive, so the turn loop, the state
+ * and the memory all live here. The models are organs; this is the nervous system.
+ *
+ * Two hard rules, enforced structurally rather than by prompt:
+ *
+ *  1. The LLM classifies and the LLM phrases. ONLY this file does arithmetic.
+ *     A model that can hallucinate must never decide how much money someone owes.
+ *  2. Nothing reaches the ledger until the merchant confirms. Saaras will
+ *     confidently transcribe a plausible ledger command out of room noise
+ *     (POC README finding #4), and such a transcript is indistinguishable from a
+ *     real one. A confirm step is the only thing that catches it.
+ *
+ * Everything goes through TOOL CALLS rather than "reply with JSON", because
+ * sarvam-30b is a reasoning model: asked in prose it burns 6000+ characters of
+ * hidden thinking and frequently never reaches an answer.
+ *
+ * No `react-native` / `expo-*` / Node imports — see ARCHITECTURE.md §3.
+ */
+import { chatTools, log, type ChatMessage, type ToolSchema } from './sarvam';
+import type {
+  Customer, Draft, DraftPerson, Entry, Khata, Session, Stage, Turn,
+} from './types';
+
+// ------------------------------------------------------------- matching -----
+
+/** Case/space normalization. Cross-script matching leans on `aliases` until §6 lands. */
+export const norm = (s: string): string =>
+  s.toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+
+const namesOf = (c: Customer): string[] => [c.name, c.name_en, ...(c.aliases ?? [])];
+
+/**
+ * Deterministic backstop for person resolution. The roster is handed to the model
+ * every turn so the *model* does most of the matching; this exists to catch the
+ * case the model cannot see — that a spoken name matches two people. It is asked
+ * to pick one, and will, silently.
+ */
+export function matchCustomers(khata: Khata, spoken: string | null | undefined): Customer[] {
+  const q = norm(spoken ?? '');
+  if (!q) return [];
+  const hit = (c: Customer) =>
+    namesOf(c).some((n) => {
+      const v = norm(n);
+      return v === q || v.startsWith(`${q} `) || q.startsWith(`${v} `) || v.split(' ').includes(q);
+    });
+  return khata.customers.filter(hit);
+}
+
+const asPerson = (c: Customer): DraftPerson => ({
+  id: c.id, name: c.name, name_en: c.name_en, balance: c.balance, phone: c.phone ?? null,
+});
+
+// ------------------------------------------------------ ledger arithmetic ---
+
+/**
+ * Balance is DERIVED — a fold over the passbook, never a field we assign to.
+ * `correction` sets an absolute figure, so this cannot be a plain sum.
+ */
+export function deriveBalance(entries: Entry[]): number {
+  let b = 0;
+  for (const e of entries) {
+    b = e.action === 'payment' ? Math.max(0, b - e.amount)
+      : e.action === 'correction' ? e.amount
+      : b + e.amount;
+  }
+  return b;
+}
+
+/**
+ * Seed data carries a `balance` with no entries behind it. Synthesize the opening
+ * row so the fold reproduces it, otherwise deriving would zero every customer.
+ */
+export function normalizeKhata(k: Khata): Khata {
+  for (const c of k.customers) {
+    // `history` is the POC's field name for the same thing.
+    const legacy = (c as unknown as { history?: Entry[] }).history;
+    if (!c.entries) c.entries = legacy ?? [];
+    if (!c.entries.length && c.balance) {
+      c.entries = [{ ts: new Date(0).toISOString(), action: 'opening', amount: c.balance, before: 0, after: c.balance }];
+    }
+    c.balance = deriveBalance(c.entries);
+    c.phone = c.phone ?? null;
+  }
+  k.audit ??= [];
+  return k;
+}
+
+const nextId = (prefix: string, taken: string[]): string => {
+  const n = taken.reduce((m, id) => {
+    const v = Number(id.startsWith(prefix) ? id.slice(prefix.length) : NaN);
+    return Number.isFinite(v) && v > m ? v : m;
+  }, 0);
+  return `${prefix}${n + 1}`;
+};
+
+// ---------------------------------------------------------------- tools -----
+
+/**
+ * ONE tool taking an ARRAY, not one tool per action. Measured: asked to emit
+ * parallel tool calls, sarvam-30b returns none at all, and sarvam-105b returns
+ * only the FIRST action and silently drops the rest — invisible data loss in a
+ * ledger. With an actions[] array both models return every action correctly.
+ */
+const LEDGER_TOOLS: ToolSchema[] = [{
+  type: 'function',
+  function: {
+    name: 'apply_ledger_actions',
+    description:
+      'Record every action the merchant just described. Call this exactly once per command, with one entry in `actions` for each customer mentioned.',
+    parameters: {
+      type: 'object',
+      properties: {
+        actions: {
+          type: 'array',
+          description:
+            'One entry per customer mentioned, in the order spoken. Never merge two customers into one entry, and never drop the last item in a list.',
+          items: {
+            type: 'object',
+            properties: {
+              kind: {
+                type: 'string',
+                enum: ['payment', 'udhaar', 'correction', 'new_customer', 'balance_query', 'unclear'],
+                description:
+                  'payment = money came IN, the customer HANDED OVER cash (Ramesh NE 200 diye, chukaya, wapas, paid, cleared). '
+                  + 'udhaar = goods went OUT on credit (liya, le gaya, saaman liya, likh do, add, aur de do). '
+                  + 'CRITICAL: "<name> KO <item> <amount> ka" — Kavita ko saabun chalees ka, Rajesh ko doodh pachaas ka — '
+                  + 'means goods worth that much were GIVEN TO them on credit. That is udhaar, never payment. '
+                  + 'The giveaway is KO plus a named item; contrast with NE plus diye, which is payment. '
+                  + 'Whenever a purchasable item is named at all, it is almost certainly udhaar. '
+                  + 'correction = set the balance to an exact figure (galat hai, actually it is). '
+                  + 'new_customer = open a NEW khata for somebody not in the roster (naya khata, new account). '
+                  + 'balance_query = merchant is only asking, nothing changes. '
+                  + 'unclear = no amount stated, or you cannot tell which customer.',
+              },
+              customer_id: {
+                type: 'string',
+                description: 'Customer id from the roster, e.g. c1. Match any name form, Devanagari or Latin, first name or full. Omit for new_customer.',
+              },
+              name_spoken: {
+                type: 'string',
+                description: 'The person\'s name EXACTLY as the merchant said it, verbatim, in the script they used. Always fill this in whenever a name was spoken.',
+              },
+              amount: {
+                type: 'number',
+                description: 'Rupees, plain number. ONLY what the merchant actually said — never add, subtract or infer.',
+              },
+              label: {
+                type: 'string',
+                description: 'What was bought, if mentioned (doodh, sabun, milk). Omit otherwise.',
+              },
+              missing: {
+                type: 'string',
+                enum: ['amount', 'customer', 'meaning'],
+                description: 'For kind=unclear only: what stopped you acting.',
+              },
+            },
+            required: ['kind'],
+          },
+        },
+      },
+      required: ['actions'],
+    },
+  },
+}];
+
+/**
+ * The confirm-stage tool. This is why confirmation cannot be a yes/no regex:
+ * "रमेश ने 100 नहीं 150 दिए थे" contains नहीं, so a regex reads an AMEND as a
+ * REJECTION and throws away a correction the merchant just made.
+ */
+const RESOLVE_TOOL: ToolSchema[] = [{
+  type: 'function',
+  function: {
+    name: 'resolve_draft',
+    description: 'The merchant is looking at pending ledger entries that have NOT been saved yet. Decide what they just did about them.',
+    parameters: {
+      type: 'object',
+      properties: {
+        decision: {
+          type: 'string',
+          enum: ['confirm', 'reject', 'amend', 'new_command'],
+          description:
+            'Decide by asking ONE question first: did the merchant say a NEGATIVE word (nahi / nahin / no / galat / mat)? '
+            + 'NO negative  -> confirm. '
+            + 'Negative AND a replacement value follows (a different number, or a different person) -> amend. '
+            + 'Negative and NO replacement value -> reject. '
+            + 'confirm = save them. Only for a clean affirmative: haan, ha, ji, theek hai, sahi hai, likh do, yes, ok, done, '
+            + 'bilkul. NEVER answer confirm when a negative word was spoken — that is always reject or amend. '
+            + 'reject = discard them, save nothing: "nahi", "nahi, rehne do", "rehne do", "chhod do", "cancel", "mat likho", '
+            + '"hatao", "galat hai" — all with no replacement figure. '
+            + 'amend = they are correcting a detail: "100 nahi, 150 diye the", "wo Gopal tha, Ramesh nahi". An amend almost '
+            + 'always contains nahi too, so the negative alone does not decide it — what decides it is the replacement. '
+            + 'new_command = no negative and no affirmative; they ignored the question and said something unrelated about a '
+            + 'different customer.',
+        },
+        amendments: {
+          type: 'array',
+          description: 'For decision=amend only. One entry per pending line being corrected.',
+          items: {
+            type: 'object',
+            properties: {
+              target_name: { type: 'string', description: 'Which pending line, by the customer name on it. Omit if there is only one.' },
+              amount: { type: 'number', description: 'The corrected rupee figure, if the amount was what changed.' },
+              kind: { type: 'string', enum: ['payment', 'udhaar', 'correction'], description: 'The corrected direction, if THAT was what changed.' },
+              name_spoken: { type: 'string', description: 'The corrected person, verbatim, if they named the wrong person.' },
+            },
+          },
+        },
+      },
+      required: ['decision'],
+    },
+  },
+}];
+
+const PICK_TOOL: ToolSchema[] = [{
+  type: 'function',
+  function: {
+    name: 'pick_person',
+    description: 'The merchant was asked WHICH person they meant. Interpret their answer.',
+    parameters: {
+      type: 'object',
+      properties: {
+        choice: {
+          type: 'string',
+          enum: ['existing', 'new_person', 'unclear'],
+          description: 'existing = they picked somebody from the list offered. new_person = none of them, open a new khata. unclear = they did not answer the question.',
+        },
+        customer_id: { type: 'string', description: 'For choice=existing: the id from the list offered, e.g. c1.' },
+        name_spoken: { type: 'string', description: 'For choice=new_person: the name, verbatim.' },
+      },
+      required: ['choice'],
+    },
+  },
+}];
+
+const AMOUNT_TOOL: ToolSchema[] = [{
+  type: 'function',
+  function: {
+    name: 'supply_amount',
+    description: 'The merchant was asked HOW MANY RUPEES. Interpret their answer.',
+    parameters: {
+      type: 'object',
+      properties: {
+        amount: { type: 'number', description: 'The rupee figure they said, plain number. Omit if they did not give one.' },
+        unclear: { type: 'boolean', description: 'True if they did not actually state an amount.' },
+      },
+    },
+  },
+}];
+
+const SAY_TOOL: ToolSchema[] = [{
+  type: 'function',
+  function: {
+    name: 'say',
+    description: 'Speak one short sentence back to the merchant, out loud.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sentence: {
+          type: 'string',
+          description:
+            'ONE natural sentence, under 25 words, in the SAME language and script the merchant used '
+            + '(Hindi in -> Hindi out, English in -> English out, Hinglish in -> Hinglish out). Warm and quick, like a '
+            + 'trusted shop assistant, never robotic. '
+            + 'MONEY RULE: copy every rupee figure through EXACTLY as the Arabic digits you were given — write 520, '
+            + 'not "पाँच सौ बीस" and never "पचास". Spelling a number out in words gets it wrong and the merchant hears '
+            + 'the wrong balance. Digits plus the word for rupees; never the ₹ symbol. Use only the numbers given — '
+            + 'never compute, round or invent one. No emoji, no markdown, no greeting preamble.',
+        },
+      },
+      required: ['sentence'],
+    },
+  },
+}];
+
+// --------------------------------------------------------------- prompts ----
+
+/** Re-rendered every turn. Cache this and the agent starts quoting stale balances. */
+const roster = (k: Khata): string =>
+  k.customers.map((c) => `${c.id} = ${c.name} / ${c.name_en} (owes ${c.balance})`).join('\n');
+
+const EXTRACT_SYSTEM = (k: Khata): string => `You are the ledger assistant for an Indian shopkeeper's udhaar (credit) book.
+
+Customers:
+${roster(k)}
+
+A shopkeeper often settles several customers in one breath, and money can move in both
+directions in the same sentence. Put EVERY customer mentioned into the actions array,
+in the order spoken.
+
+Whenever a person is named, ALWAYS fill in name_spoken with their name exactly as you
+heard it, even when you are confident which roster id it is.
+
+If the merchant is only ASKING something ("Ramesh ka kitna baaki hai?", "how much does
+Kavita owe?") that is one action of kind balance_query — never unclear.
+
+If one part of the command is unusable — no amount, or you cannot tell who — mark only
+that entry unclear and still act on the parts you did understand.
+
+Report only the amount the merchant actually said. Never add, subtract or infer a number.
+The merchant speaks Hindi, English, or a mix of both.`;
+
+const SPEAK_SYSTEM = `You are the voice of a shopkeeper's udhaar-book assistant.
+The arithmetic has already been done for you and is given below as fact.
+Never compute, never round, never invent a number. Say only what the facts support.`;
+
+// ---------------------------------------------------------------- drafts ----
+
+interface RawAction {
+  kind?: string;
+  customer_id?: string;
+  name_spoken?: string;
+  amount?: number;
+  label?: string;
+  missing?: string;
+}
+
+const price = (d: Draft, base: number): void => {
+  const amt = d.amount ?? 0;
+  d.before = base;
+  d.after = d.kind === 'payment' ? Math.max(0, base - amt)
+    : d.kind === 'correction' ? amt
+    : base + amt;
+  d.overpaid = d.kind === 'payment' && amt > base ? amt - base : 0;
+};
+
+/**
+ * The write gate, moved earlier: this decides what we KNOW, and prices the
+ * preview. It never writes. A voice agent that silently guesses at money is
+ * worse than one that asks again.
+ */
+export function stageIntent(khata: Khata, act: RawAction, id: string): Draft {
+  const kindIn = act?.kind ?? 'unclear';
+  const spoken = act?.name_spoken?.trim() || null;
+  const amount = Number.isFinite(Number(act?.amount)) && Number(act?.amount) > 0 ? Number(act.amount) : null;
+
+  const draft: Draft = {
+    id,
+    kind: (kindIn === 'new_customer' ? 'new_customer' : kindIn === 'udhaar' ? 'udhaar' : kindIn === 'correction' ? 'correction' : 'payment'),
+    name_spoken: spoken,
+    customer_id: null,
+    person: null,
+    amount,
+    label: act?.label,
+    before: null,
+    after: null,
+    overpaid: 0,
+    status: 'unclear',
+    options: [],
+  };
+
+  if (kindIn === 'unclear' || !['payment', 'udhaar', 'correction', 'new_customer'].includes(kindIn)) {
+    draft.status = act?.missing === 'amount' ? 'needs_amount' : act?.missing === 'customer' ? 'needs_customer' : 'unclear';
+  }
+
+  // Opening a brand-new khata: there is nobody to resolve, only a name to keep.
+  if (draft.kind === 'new_customer' && draft.status !== 'needs_customer') {
+    if (!spoken) { draft.status = 'needs_customer'; return draft; }
+    price(draft, 0);
+    draft.kind = 'new_customer';
+    draft.status = 'ready';
+    return draft;
+  }
+
+  // Resolve WHO. The model's pick is a hint; the deterministic match decides,
+  // because the model cannot tell us that a name was ambiguous — it just picks.
+  const byName = matchCustomers(khata, spoken);
+  const byId = khata.customers.find((c) => c.id === act?.customer_id) ?? null;
+
+  let person: Customer | null = null;
+  if (byName.length === 1) person = byName[0];
+  else if (byName.length > 1) {
+    // The model's choice only breaks the tie if it is one of the real candidates.
+    draft.options = byName.map(asPerson);
+    draft.status = 'ambiguous';
+    return draft;
+  } else if (byId) person = byId;
+
+  if (!person) {
+    draft.status = 'needs_customer';
+    return draft;
+  }
+
+  draft.customer_id = person.id;
+  draft.person = asPerson(person);
+
+  if (draft.status === 'needs_amount' || amount === null) {
+    draft.status = 'needs_amount';
+    draft.before = person.balance;
+    return draft;
+  }
+
+  price(draft, person.balance);
+  draft.status = 'ready';
+  return draft;
+}
+
+/** Re-resolve and re-price a pending line after the merchant corrects it. */
+export function amendDraft(
+  khata: Khata,
+  draft: Draft,
+  patch: { amount?: number; kind?: Draft['kind']; name_spoken?: string },
+): Draft {
+  if (patch.kind) draft.kind = patch.kind;
+  if (Number.isFinite(Number(patch.amount)) && Number(patch.amount) > 0) draft.amount = Number(patch.amount);
+
+  if (patch.name_spoken) {
+    const hits = matchCustomers(khata, patch.name_spoken);
+    draft.name_spoken = patch.name_spoken;
+    if (hits.length === 1) {
+      draft.customer_id = hits[0].id;
+      draft.person = asPerson(hits[0]);
+      draft.status = 'ready';
+    } else if (hits.length > 1) {
+      draft.options = hits.map(asPerson);
+      draft.status = 'ambiguous';
+      return draft;
+    } else {
+      draft.status = 'needs_customer';
+      return draft;
+    }
+  }
+
+  if (draft.amount === null) { draft.status = 'needs_amount'; return draft; }
+  if (draft.kind !== 'new_customer' && !draft.person) { draft.status = 'needs_customer'; return draft; }
+
+  price(draft, draft.kind === 'new_customer' ? 0 : (draft.person?.balance ?? 0));
+  draft.status = 'ready';
+  return draft;
+}
+
+const ENTRY_ACTION = { payment: 'payment', udhaar: 'new_udhaar', correction: 'correction', new_customer: 'opening' } as const;
+
+/**
+ * The ONLY writer. Appends to the passbook and re-derives every balance it
+ * touched — balance is never assigned directly, so history and total can't drift.
+ */
+export function commitDrafts(khata: Khata, drafts: Draft[]): Turn['committed'] {
+  const committed: Turn['committed'] = [];
+  const ts = new Date().toISOString();
+
+  for (const d of drafts) {
+    if (d.status !== 'ready') continue;
+
+    let cust: Customer | undefined;
+    if (d.kind === 'new_customer') {
+      const name = d.name_spoken ?? 'Walk-in';
+      cust = {
+        id: nextId('c', khata.customers.map((c) => c.id)),
+        name,
+        name_en: name,
+        aliases: [name],
+        phone: null,
+        balance: 0,
+        entries: [],
+      };
+      khata.customers.push(cust);
+    } else {
+      cust = khata.customers.find((c) => c.id === d.customer_id);
+    }
+    if (!cust) continue;
+
+    const action = ENTRY_ACTION[d.kind];
+    const before = cust.balance;
+    const entry: Entry = { ts, action, amount: d.amount ?? 0, before, after: d.after ?? before, label: d.label };
+    cust.entries.push(entry);
+    cust.balance = deriveBalance(cust.entries);
+    khata.audit.push({ ...entry, after: cust.balance, customer_id: cust.id });
+
+    committed.push({ customer_id: cust.id, name_en: cust.name_en, before, after: cust.balance, amount: d.amount ?? 0 });
+  }
+  return committed;
+}
+
+// ----------------------------------------------------------------- reply ----
+
+/**
+ * The model still slips a ₹ in sometimes despite being told not to, and Saaras
+ * itself transcribes spoken "do sau rupaye" AS "₹200" — so the symbol arrives
+ * from both directions. Bulbul has no reliable pronunciation for it.
+ */
+export function speechSafe(s: string): string {
+  const devanagari = /[ऀ-ॿ]/.test(s);
+  return s
+    .replace(/₹\s*([\d,]+)/g, devanagari ? '$1 रुपये' : '$1 rupees')
+    .replace(/([\d,]+)\s*₹/g, devanagari ? '$1 रुपये' : '$1 rupees')
+    .replace(/₹/g, devanagari ? 'रुपये' : 'rupees')
+    .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}]/gu, '')
+    .replace(/[*_`#]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Facts are prose, not JSON — the phrasing model reads them better that way. */
+function draftFacts(d: Draft): string {
+  const who = d.person ? `${d.person.name_en} (${d.person.name})` : (d.name_spoken ?? 'someone');
+  switch (d.status) {
+    case 'ready': {
+      if (d.kind === 'new_customer') {
+        return `NEW khata for ${who}, opening balance ${d.after} rupees. NOT SAVED YET — ask the merchant to confirm.`;
+      }
+      const verb = d.kind === 'payment' ? 'paid back' : d.kind === 'udhaar' ? 'took new credit of' : 'had their balance set to';
+      const over = d.overpaid ? ` They overpaid by ${d.overpaid} rupees.` : '';
+      return `${who} ${verb} ${d.amount} rupees. Balance would go from ${d.before} to ${d.after}.${over}`
+        + ' NOT SAVED YET — state the old and new balance and ask the merchant to confirm.';
+    }
+    case 'ambiguous':
+      return `The name "${d.name_spoken}" matches more than one person: ${d.options.map((o) => `${o.name_en} (owes ${o.balance})`).join(', ')}.`
+        + ' Ask WHICH ONE, naming them. Do not state any new balance.';
+    case 'needs_amount':
+      return `${who} currently owes ${d.before ?? 0} rupees. The merchant did NOT say how many rupees. Ask how much. Do NOT state any new balance.`;
+    case 'needs_customer':
+      return `You could not tell WHICH customer "${d.name_spoken ?? ''}" is. Ask which customer, by name. Do NOT state any balance.`;
+    default:
+      return 'You did not understand the command. Ask the merchant to repeat it simply, for example "Ramesh ne 200 diye".';
+  }
+}
+
+async function composeReply(facts: string, transcript: string, terse: boolean): Promise<string> {
+  const messages: ChatMessage[] = [
+    { role: 'system', content: SPEAK_SYSTEM },
+    {
+      role: 'user',
+      // Every extra word is another second the merchant stands there waiting.
+      content: `The merchant said: "${transcript}"\n\nFacts you must use:\n${facts}`
+        + (terse ? '\n\nKeep it to 10 words or fewer.' : ''),
+    },
+  ];
+  const calls = await chatTools<{ sentence?: string }>(messages, SAY_TOOL, {
+    tool_choice: { type: 'function', function: { name: 'say' } },
+    temperature: 0.4,
+    max_tokens: 900,
+  });
+  // Silence is the one unacceptable reply — the merchant is left wondering
+  // whether the phone heard them at all.
+  return speechSafe(calls[0]?.args?.sentence ?? '') || 'फिर से बोलिए।';
+}
+
+// ------------------------------------------------------------ the machine ---
+
+/** Which question is on the table decides which tool schema the model gets next. */
+function recompute(session: Session): void {
+  const blocked = session.drafts.find((d) => d.status === 'ambiguous' || d.status === 'needs_customer');
+  if (blocked) { session.stage = 'picking'; session.focus = blocked.id; return; }
+  const noAmount = session.drafts.find((d) => d.status === 'needs_amount');
+  if (noAmount) { session.stage = 'awaiting_amount'; session.focus = noAmount.id; return; }
+  if (session.drafts.some((d) => d.status === 'ready')) { session.stage = 'confirming'; session.focus = null; return; }
+  session.stage = 'idle';
+  session.drafts = [];
+  session.focus = null;
+}
+
+async function extract(transcript: string, khata: Khata, session: Session) {
+  const messages: ChatMessage[] = [
+    { role: 'system', content: EXTRACT_SYSTEM(khata) },
+    ...session.history.slice(-6),
+    { role: 'user', content: transcript },
+  ];
+  const calls = await chatTools<{ actions?: RawAction[] }>(messages, LEDGER_TOOLS, {
+    tool_choice: 'auto',
+    max_tokens: 1500,
+  });
+  const actions = calls[0]?.args?.actions;
+  return Array.isArray(actions) && actions.length ? actions : [{ kind: 'unclear', missing: 'meaning' } as RawAction];
+}
+
+/**
+ * One full turn. `khata` comes in as an argument and goes out (possibly mutated)
+ * — this function never reads or writes storage, which is what keeps it runnable
+ * under Node with no phone attached.
+ */
+export async function runTurn(transcript: string, session: Session, khata: Khata): Promise<Turn> {
+  const t0 = Date.now();
+  const stageIn: Stage = session.stage;
+  let committed: Turn['committed'] = [];
+  const notes: string[] = [];
+
+  const seq = () => `d${session.drafts.length + 1}_${Date.now().toString(36)}`;
+
+  const stageFresh = async (text: string) => {
+    const actions = await extract(text, khata, session);
+    const queries: string[] = [];
+    for (const a of actions) {
+      if (a.kind === 'balance_query') {
+        const hits = matchCustomers(khata, a.name_spoken);
+        const c = hits.length === 1 ? hits[0] : khata.customers.find((x) => x.id === a.customer_id);
+        queries.push(c
+          ? `${c.name_en} (${c.name}) currently owes ${c.balance} rupees. Nothing changed — just tell the merchant this balance.`
+          : 'You could not tell which customer they asked about. Ask which one.');
+        continue;
+      }
+      session.drafts.push(stageIntent(khata, a, seq()));
+    }
+    notes.push(...queries);
+  };
+
+  switch (stageIn) {
+    case 'confirming': {
+      const calls = await chatTools<{ decision?: string; amendments?: { target_name?: string; amount?: number; kind?: Draft['kind']; name_spoken?: string }[] }>(
+        [
+          { role: 'system', content: `You are a shopkeeper's ledger assistant. These entries are pending and NOT yet saved:\n${pendingSummary(session)}` },
+          { role: 'user', content: transcript },
+        ],
+        RESOLVE_TOOL,
+        { tool_choice: { type: 'function', function: { name: 'resolve_draft' } }, max_tokens: 900 },
+      );
+      const decision = calls[0]?.args?.decision ?? 'new_command';
+
+      if (decision === 'confirm') {
+        committed = commitDrafts(khata, session.drafts);
+        session.drafts = [];
+        notes.push(committed.length
+          ? `SAVED to the book: ${committed.map((c) => `${c.name_en} now owes ${c.after} rupees (was ${c.before})`).join('; ')}. Confirm briefly.`
+          : 'There was nothing left to save. Say so briefly.');
+      } else if (decision === 'reject') {
+        session.drafts = [];
+        notes.push('The merchant cancelled the pending entries. Nothing was saved. Acknowledge in a few words and invite them to say it again.');
+      } else if (decision === 'amend') {
+        const patches = calls[0]?.args?.amendments ?? [];
+        if (!patches.length) {
+          notes.push('They are correcting something but you could not tell what. Ask them to repeat the correction.');
+        }
+        for (const p of patches) {
+          const target = pickTarget(session, p.target_name);
+          if (!target) continue;
+          amendDraft(khata, target, p);
+        }
+        notes.push('The merchant CORRECTED a pending entry. It is still NOT saved. Read back the corrected figures and ask them to confirm.');
+      } else {
+        // They ignored the question and said something else entirely.
+        session.drafts = [];
+        await stageFresh(transcript);
+      }
+      break;
+    }
+
+    case 'picking': {
+      const focus = session.drafts.find((d) => d.id === session.focus);
+      const offered = focus?.options ?? [];
+      const calls = await chatTools<{ choice?: string; customer_id?: string; name_spoken?: string }>(
+        [
+          {
+            role: 'system',
+            content: `The merchant was asked which person they meant${focus?.name_spoken ? ` by "${focus.name_spoken}"` : ''}.\n`
+              + `Options offered:\n${offered.map((o) => `${o.id} = ${o.name} / ${o.name_en} (owes ${o.balance})`).join('\n') || '(none — nobody matched)'}`,
+          },
+          { role: 'user', content: transcript },
+        ],
+        PICK_TOOL,
+        { tool_choice: { type: 'function', function: { name: 'pick_person' } }, max_tokens: 600 },
+      );
+      const a = calls[0]?.args ?? {};
+      if (focus && a.choice === 'existing') {
+        const c = khata.customers.find((x) => x.id === a.customer_id)
+          ?? matchCustomers(khata, transcript).find((x) => offered.some((o) => o.id === x.id));
+        if (c) {
+          focus.customer_id = c.id;
+          focus.person = asPerson(c);
+          focus.options = [];
+          focus.status = focus.amount === null ? 'needs_amount' : 'ready';
+          if (focus.status === 'ready') price(focus, c.balance); else focus.before = c.balance;
+        } else {
+          notes.push('You could not tell which of the options they picked. Ask again, naming the options.');
+        }
+      } else if (focus && a.choice === 'new_person') {
+        focus.kind = 'new_customer';
+        focus.name_spoken = a.name_spoken ?? focus.name_spoken;
+        focus.options = [];
+        focus.status = focus.amount === null ? 'needs_amount' : 'ready';
+        if (focus.status === 'ready') price(focus, 0); else focus.before = 0;
+      } else {
+        notes.push('They did not answer which person. Ask again, briefly, naming the options.');
+      }
+      break;
+    }
+
+    case 'awaiting_amount': {
+      const focus = session.drafts.find((d) => d.id === session.focus);
+      const calls = await chatTools<{ amount?: number; unclear?: boolean }>(
+        [
+          {
+            role: 'system',
+            content: `The merchant was asked how many rupees${focus?.person ? ` for ${focus.person.name_en}` : ''}. Extract the number.`,
+          },
+          { role: 'user', content: transcript },
+        ],
+        AMOUNT_TOOL,
+        { tool_choice: { type: 'function', function: { name: 'supply_amount' } }, max_tokens: 400 },
+      );
+      const amt = Number(calls[0]?.args?.amount);
+      if (focus && Number.isFinite(amt) && amt > 0) amendDraft(khata, focus, { amount: amt });
+      else notes.push('They still did not state an amount. Ask how many rupees, in a few words.');
+      break;
+    }
+
+    default:
+      await stageFresh(transcript);
+  }
+
+  recompute(session);
+  const tRoute = Date.now();
+
+  // Build the facts. Only our arithmetic gets in here — the model phrases, and
+  // phrases only from these lines.
+  const factLines = [
+    ...notes,
+    ...session.drafts.map((d, i) => (session.drafts.length > 1 ? `Pending ${i + 1}: ${draftFacts(d)}` : draftFacts(d))),
+  ];
+  if (session.drafts.length > 1) {
+    factLines.push(`There are ${session.drafts.length} pending entries. Confirm them all in ONE short sentence, naming each person. Do not use bullet points — say it as a shopkeeper would.`);
+  }
+  const facts = factLines.join('\n') || 'Nothing is pending. Ask what they would like to record.';
+
+  const reply = await composeReply(facts, transcript, session.drafts.length <= 1 && !notes.length);
+
+  // Plain-text history: replaying raw tool_calls would need matching tool-result
+  // messages, and the extra protocol surface buys us nothing here.
+  session.history.push({ role: 'user', content: transcript });
+  session.history.push({ role: 'assistant', content: `[stage=${session.stage} ${pendingSummary(session) || 'none'}]` });
+  session.history = session.history.slice(-12);
+
+  log('turn', { transcript, stage_in: stageIn, stage_out: session.stage, drafts: session.drafts.length, wrote: committed.length });
+
+  return {
+    transcript,
+    stage: session.stage,
+    drafts: session.drafts.map((d) => ({ ...d })),
+    committed,
+    wrote: committed.length > 0,
+    khata,
+    reply,
+    timings: { route_ms: tRoute - t0, compose_ms: Date.now() - tRoute, total_ms: Date.now() - t0 },
+  };
+}
+
+function pickTarget(session: Session, name?: string): Draft | undefined {
+  if (!name) return session.drafts.find((d) => d.status === 'ready') ?? session.drafts[0];
+  const q = norm(name);
+  return session.drafts.find((d) => {
+    const hay = [d.person?.name, d.person?.name_en, d.name_spoken].filter(Boolean).map((s) => norm(s as string));
+    return hay.some((h) => h === q || h.includes(q) || q.includes(h));
+  }) ?? session.drafts[0];
+}
+
+const pendingSummary = (session: Session): string =>
+  session.drafts
+    .map((d) => `${d.person?.name_en ?? d.name_spoken ?? '?'} ${d.kind} ${d.amount ?? '?'} (${d.status})`)
+    .join('; ');
