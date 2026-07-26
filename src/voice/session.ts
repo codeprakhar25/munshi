@@ -143,7 +143,16 @@ export class VoiceSession {
    * anyway, and starting to listen underneath our own voice is how Saaras ends
    * up transcribing the agent (POC finding #4).
    */
+  /**
+   * True between stopConversation() and the next startConversation(). While
+   * set, NOTHING may reach the speaker: a turn that was mid-flight when the
+   * overlay closed would otherwise finish its model call seconds later and
+   * speak from a closed overlay.
+   */
+  private deactivated = false;
+
   async startConversation(greet?: string): Promise<void> {
+    this.deactivated = false;
     if (greet) await this.speakOnly(greet);
     await this.start();
   }
@@ -151,6 +160,7 @@ export class VoiceSession {
   async stopConversation(): Promise<void> {
     // Dead stop, mid-sentence: close the reply stream (or Bulbul keeps feeding
     // a dead player) AND kill playback, same as a barge-in.
+    this.deactivated = true;
     this.tts?.close();
     this.tts = null;
     this.audio.stopPlayback();
@@ -170,7 +180,7 @@ export class VoiceSession {
 
   /** Speak a line without running a turn — greetings, prompts, errors. */
   private async speakOnly(text: string): Promise<void> {
-    if (!text.trim()) return;
+    if (!text.trim() || this.deactivated) return;
     this.audio.beginSpeaking();
     const tts = this.tts = new TtsSocket({
       onAudio: (bytes) => this.audio.pushAudio(bytes),
@@ -228,7 +238,7 @@ export class VoiceSession {
     // Open Bulbul NOW, in parallel with the model calls, so the handshake and
     // config round trip are already paid for by the time a sentence exists.
     let tts: TtsSocket | null = null;
-    if (speak) {
+    if (speak && !this.deactivated) {
       this.audio.beginSpeaking();
       tts = this.tts = new TtsSocket({
         onAudio: (bytes) => {
@@ -264,6 +274,14 @@ export class VoiceSession {
         this.cb.onKhata(this.khata);
       }
       this.cb.onView({ stage: turn.stage, drafts: turn.drafts, reply: turn.reply });
+
+      // The overlay may have been closed while the model was thinking — a
+      // deactivated agent must never speak, so the reply is dropped, not queued.
+      if (tts && this.deactivated) {
+        tts.close();
+        tts = null;
+        this.audio.stopPlayback();
+      }
 
       if (tts) {
         this.cb.onView({ state: 'speaking' });

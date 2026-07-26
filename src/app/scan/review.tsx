@@ -200,8 +200,8 @@ export default function ScanReviewScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }} edges={['top', 'bottom']}>
-      <AmbientBackdrop image="radial-gradient(circle at 85% 0%, #ffedd5 0%, rgba(255,237,213,0) 50%)" />
-      <AmbientBackdrop image="radial-gradient(circle at 0% 100%, #e0e7ff 0%, rgba(224,231,255,0) 42%)" />
+      <AmbientBackdrop image="linear-gradient(200deg, rgba(255,237,213,0.75) 0%, rgba(255,237,213,0) 38%)" />
+      <AmbientBackdrop image="linear-gradient(20deg, rgba(224,231,255,0.6) 0%, rgba(224,231,255,0) 32%)" />
 
       <View className="px-5 pb-3 pt-2">
         <Text

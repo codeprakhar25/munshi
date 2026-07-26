@@ -56,23 +56,13 @@ export default function PersonScreen() {
     ]);
   }
 
-  function confirmDeleteEntry(entryIndex: number) {
-    if (!khata || !customer) return;
-    const e = customer.entries[entryIndex];
-    if (!e) return;
-    Alert.alert('यह एंट्री हटाएँ?', `${e.label || (e.action === 'payment' ? 'जमा' : 'उधार')} — ₹${e.amount}`, [
-      { text: 'नहीं', style: 'cancel' },
-      {
-        text: 'हटाओ',
-        style: 'destructive',
-        onPress: () => {
-          customer.entries.splice(entryIndex, 1);
-          rebuildChain(customer.entries);
-          customer.balance = deriveBalance(customer.entries);
-          void saveKhata(khata).then(() => setKhata({ ...khata }));
-        },
-      },
-    ]);
+  /** One tap, no dialog — the row's ✕ deletes the entry immediately. */
+  function deleteEntry(entryIndex: number) {
+    if (!khata || !customer || !customer.entries[entryIndex]) return;
+    customer.entries.splice(entryIndex, 1);
+    rebuildChain(customer.entries);
+    customer.balance = deriveBalance(customer.entries);
+    void saveKhata(khata).then(() => setKhata({ ...khata }));
   }
 
   if (!khata) {
@@ -167,10 +157,7 @@ export default function PersonScreen() {
               const when = new Date(e.ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
               return (
                 <Rise key={`${e.ts}-${entryIndex}`} index={3 + Math.min(i, 5)}>
-                  <PressScale
-                    scaleTo={0.985}
-                    onLongPress={() => confirmDeleteEntry(entryIndex)}
-                    style={styles.entryRow}>
+                  <RNView style={styles.entryRow}>
                     <View className="min-w-0 flex-1 pr-3">
                       <Text className="text-sm font-semibold text-ink" numberOfLines={1}>
                         {e.label || (pay ? 'जमा' : e.action === 'correction' ? 'सुधार' : 'उधार')}
@@ -184,15 +171,15 @@ export default function PersonScreen() {
                       {/* Running balance, frozen at write time — the passbook feel. */}
                       <Text className="mt-0.5 text-xs text-muted">बाकी ₹{e.after.toLocaleString('en-IN')}</Text>
                     </View>
-                  </PressScale>
+                    <PressScale scaleTo={0.9} onPress={() => deleteEntry(entryIndex)} hitSlop={8} style={styles.entryDelete}>
+                      <Text style={{ fontSize: 12, color: Porcelain.muted }}>✕</Text>
+                    </PressScale>
+                  </RNView>
                 </Rise>
               );
             })
           )}
         </View>
-        {events.length > 0 && (
-          <Text className="mt-3 text-center text-xs text-muted">एंट्री हटाने के लिए देर तक दबाएँ</Text>
-        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -226,11 +213,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 10,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: Porcelain.line,
     backgroundColor: Porcelain.white,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     paddingVertical: 14,
+  },
+  entryDelete: {
+    height: 26,
+    width: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: Porcelain.line,
+    backgroundColor: Porcelain.paper,
   },
 });

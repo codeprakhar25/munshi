@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, View as RNView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -52,6 +52,17 @@ export default function HomeScreen() {
     if (!khata || !voice.current) return;
     voice.current.setKhata(khata);
   }, [khata]);
+
+  // Reload on focus: the person screen deletes entries/customers directly in
+  // storage, and coming back must show the ledger as it now is.
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      void loadKhata().then((k) => { if (alive && khata) setKhata(k); });
+      return () => { alive = false; };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+  );
 
   const openVoice = useCallback(async () => {
     setVoiceOpen(true);

@@ -69,8 +69,8 @@ export default function ScanSourceScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }} edges={['top', 'bottom']}>
-      <AmbientBackdrop image="radial-gradient(circle at 90% -10%, #ffedd5 0%, rgba(255,237,213,0) 52%)" />
-      <AmbientBackdrop image="radial-gradient(circle at 8% 110%, #e0e7ff 0%, rgba(224,231,255,0) 48%)" />
+      <AmbientBackdrop image="linear-gradient(200deg, rgba(255,237,213,0.75) 0%, rgba(255,237,213,0) 38%)" />
+      <AmbientBackdrop image="linear-gradient(20deg, rgba(224,231,255,0.6) 0%, rgba(224,231,255,0) 32%)" />
 
       <View className="flex-row items-center justify-between px-4 pt-1">
         <PressScale
@@ -144,7 +144,7 @@ export default function ScanSourceScreen() {
             <View style={{ alignItems: 'center' }}>
               <Animated.View pointerEvents="none" style={[styles.shutterHalo, shutterHalo]}>
                 <Gradient
-                  image="radial-gradient(circle, rgba(245,158,11,0.45) 0%, rgba(245,158,11,0) 70%)"
+                  image="linear-gradient(90deg, rgba(245,158,11,0) 0%, rgba(245,158,11,0.4) 50%, rgba(245,158,11,0) 100%)"
                   style={StyleSheet.absoluteFill}
                 />
               </Animated.View>

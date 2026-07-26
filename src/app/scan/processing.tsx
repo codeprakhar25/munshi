@@ -179,8 +179,8 @@ export default function ScanProcessingScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }}>
-      <AmbientBackdrop image="radial-gradient(circle at 80% 0%, #ffedd5 0%, rgba(255,237,213,0) 55%)" />
-      <AmbientBackdrop image="radial-gradient(circle at 10% 100%, #e0e7ff 0%, rgba(224,231,255,0) 45%)" />
+      <AmbientBackdrop image="linear-gradient(200deg, rgba(255,237,213,0.75) 0%, rgba(255,237,213,0) 38%)" />
+      <AmbientBackdrop image="linear-gradient(20deg, rgba(224,231,255,0.6) 0%, rgba(224,231,255,0) 32%)" />
 
       {jobPhase === 'error' ? (
         <View className="flex-1 items-center justify-center gap-3 px-8">
