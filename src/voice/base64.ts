@@ -76,7 +76,7 @@ export function floatToPcm16(input: Float32Array): Uint8Array {
 }
 
 /** Little-endian PCM16 -> Float32 [-1,1], for scheduling onto the audio graph. */
-export function pcm16ToFloat(bytes: Uint8Array): Float32Array {
+export function pcm16ToFloat(bytes: Uint8Array): Float32Array<ArrayBuffer> {
   const n = bytes.length >> 1;
   const out = new Float32Array(n);
   for (let i = 0; i < n; i++) {

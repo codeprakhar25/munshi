@@ -39,12 +39,27 @@ const namesOf = (c: Customer): string[] => [c.name, c.name_en, ...(c.aliases ?? 
 export function matchCustomers(khata: Khata, spoken: string | null | undefined): Customer[] {
   const q = norm(spoken ?? '');
   if (!q) return [];
-  const hit = (c: Customer) =>
-    namesOf(c).some((n) => {
+
+  // Tiered, because a looser rule makes the fuller name USELESS for
+  // disambiguating. "रमेश कुमार" must not also match Ramesh Joshi just because
+  // "रमेश" is one of his aliases — saying more of the name is exactly how a
+  // merchant answers "which Ramesh?", so a stronger match has to win outright.
+  const tier = (c: Customer): number => {
+    let best = 99;
+    for (const n of namesOf(c)) {
       const v = norm(n);
-      return v === q || v.startsWith(`${q} `) || q.startsWith(`${v} `) || v.split(' ').includes(q);
-    });
-  return khata.customers.filter(hit);
+      if (!v) continue;
+      if (v === q) best = Math.min(best, 0);                            // exact
+      else if (q.startsWith(`${v} `) || v.startsWith(`${q} `)) best = Math.min(best, 1); // one extends the other
+      else if (v.split(' ').includes(q)) best = Math.min(best, 2);      // a word within the name
+    }
+    return best;
+  };
+
+  const scored = khata.customers.map((c) => ({ c, t: tier(c) })).filter((s) => s.t < 99);
+  if (!scored.length) return [];
+  const best = Math.min(...scored.map((s) => s.t));
+  return scored.filter((s) => s.t === best).map((s) => s.c);
 }
 
 const asPerson = (c: Customer): DraftPerson => ({
@@ -56,11 +71,17 @@ const asPerson = (c: Customer): DraftPerson => ({
 /**
  * Balance is DERIVED — a fold over the passbook, never a field we assign to.
  * `correction` sets an absolute figure, so this cannot be a plain sum.
+ *
+ * A NEGATIVE balance means the shop owes the customer: they paid more than they
+ * owed and are in credit. This must NOT be clamped to zero. Clamping inside the
+ * fold destroys the credit permanently, and the next purchase then re-bills money
+ * the customer has already handed over — owe 500, pay 700, later take 150 of
+ * goods, and a clamping ledger says they owe 150 when they are actually 50 up.
  */
 export function deriveBalance(entries: Entry[]): number {
   let b = 0;
   for (const e of entries) {
-    b = e.action === 'payment' ? Math.max(0, b - e.amount)
+    b = e.action === 'payment' ? b - e.amount
       : e.action === 'correction' ? e.amount
       : b + e.amount;
   }
@@ -316,12 +337,16 @@ interface RawAction {
   missing?: string;
 }
 
+/** Must apply exactly the same arithmetic as `deriveBalance`, or the preview lies. */
+export const applyAction = (kind: Draft['kind'], base: number, amount: number): number =>
+  kind === 'payment' ? base - amount
+    : kind === 'correction' ? amount
+    : base + amount;
+
 const price = (d: Draft, base: number): void => {
   const amt = d.amount ?? 0;
   d.before = base;
-  d.after = d.kind === 'payment' ? Math.max(0, base - amt)
-    : d.kind === 'correction' ? amt
-    : base + amt;
+  d.after = applyAction(d.kind, base, amt);
   d.overpaid = d.kind === 'payment' && amt > base ? amt - base : 0;
 };
 
@@ -330,7 +355,7 @@ const price = (d: Draft, base: number): void => {
  * preview. It never writes. A voice agent that silently guesses at money is
  * worse than one that asks again.
  */
-export function stageIntent(khata: Khata, act: RawAction, id: string): Draft {
+export function stageIntent(khata: Khata, act: RawAction, id: string, projected?: Map<string, number>): Draft {
   const kindIn = act?.kind ?? 'unclear';
   const spoken = act?.name_spoken?.trim() || null;
   const amount = Number.isFinite(Number(act?.amount)) && Number(act?.amount) > 0 ? Number(act.amount) : null;
@@ -385,13 +410,20 @@ export function stageIntent(khata: Khata, act: RawAction, id: string): Draft {
   draft.customer_id = person.id;
   draft.person = asPerson(person);
 
+  // A merchant can name the same person twice in one breath ("Ramesh ne 100 diye,
+  // aur Ramesh ko 50 ka saaman bhi de do"). Price against the running projection
+  // so the second line follows the first, instead of both quoting the pre-turn
+  // balance and the reply speaking a figure that was never going to be true.
+  const base = projected?.get(person.id) ?? person.balance;
+
   if (draft.status === 'needs_amount' || amount === null) {
     draft.status = 'needs_amount';
-    draft.before = person.balance;
+    draft.before = base;
     return draft;
   }
 
-  price(draft, person.balance);
+  price(draft, base);
+  projected?.set(person.id, draft.after ?? base);
   draft.status = 'ready';
   return draft;
 }
@@ -462,13 +494,20 @@ export function commitDrafts(khata: Khata, drafts: Draft[]): Turn['committed'] {
     if (!cust) continue;
 
     const action = ENTRY_ACTION[d.kind];
+    const amount = d.amount ?? 0;
+    // Recompute against the LIVE balance rather than trusting the staged preview.
+    // Two drafts for the same customer in one breath are both priced off the
+    // pre-turn balance, so the second one's `after` is stale by the first one's
+    // amount — and that stale figure is what the merchant reads back later in
+    // the passbook. Deriving here keeps every row consistent with the fold.
     const before = cust.balance;
-    const entry: Entry = { ts, action, amount: d.amount ?? 0, before, after: d.after ?? before, label: d.label };
+    const after = applyAction(d.kind === 'new_customer' ? 'udhaar' : d.kind, before, amount);
+    const entry: Entry = { ts, action, amount, before, after, label: d.label };
     cust.entries.push(entry);
     cust.balance = deriveBalance(cust.entries);
-    khata.audit.push({ ...entry, after: cust.balance, customer_id: cust.id });
+    khata.audit.push({ ...entry, customer_id: cust.id });
 
-    committed.push({ customer_id: cust.id, name_en: cust.name_en, before, after: cust.balance, amount: d.amount ?? 0 });
+    committed.push({ customer_id: cust.id, name_en: cust.name_en, before, after: cust.balance, amount });
   }
   return committed;
 }
@@ -501,8 +540,13 @@ function draftFacts(d: Draft): string {
         return `NEW khata for ${who}, opening balance ${d.after} rupees. NOT SAVED YET — ask the merchant to confirm.`;
       }
       const verb = d.kind === 'payment' ? 'paid back' : d.kind === 'udhaar' ? 'took new credit of' : 'had their balance set to';
-      const over = d.overpaid ? ` They overpaid by ${d.overpaid} rupees.` : '';
-      return `${who} ${verb} ${d.amount} rupees. Balance would go from ${d.before} to ${d.after}.${over}`
+      // A negative balance is the customer in CREDIT — the shop owes them. Say so
+      // in those words, because "minus fifty rupees baaki" would be read as a debt.
+      const after = (d.after ?? 0) < 0
+        ? `the SHOP would owe THEM ${Math.abs(d.after ?? 0)} rupees (they are in credit, they owe nothing)`
+        : `${d.after}`;
+      const over = d.overpaid ? ` They paid ${d.overpaid} rupees more than they owed.` : '';
+      return `${who} ${verb} ${d.amount} rupees. Balance would go from ${d.before} to ${after}.${over}`
         + ' NOT SAVED YET — state the old and new balance and ask the merchant to confirm.';
     }
     case 'ambiguous':
@@ -558,7 +602,12 @@ async function extract(transcript: string, khata: Khata, session: Session) {
     { role: 'user', content: transcript },
   ];
   const calls = await chatTools<{ actions?: RawAction[] }>(messages, LEDGER_TOOLS, {
-    tool_choice: 'auto',
+    // FORCED, not 'auto'. Left on auto, sarvam-30b intermittently burns ~1000
+    // chars of hidden reasoning and then returns finish_reason:stop with no tool
+    // call — the merchant's command simply vanishes and the agent says "say that
+    // again" to a sentence it understood perfectly well. There is no outcome where
+    // we don't want an actions array: `unclear` already covers "couldn't parse it".
+    tool_choice: { type: 'function', function: { name: 'apply_ledger_actions' } },
     max_tokens: 1500,
   });
   const actions = calls[0]?.args?.actions;
@@ -581,6 +630,11 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
   const stageFresh = async (text: string) => {
     const actions = await extract(text, khata, session);
     const queries: string[] = [];
+    // Running balances for anyone already touched by a draft this turn, so a
+    // second mention of the same person chains off the first.
+    const projected = new Map<string, number>(
+      session.drafts.filter((d) => d.customer_id && d.after !== null).map((d) => [d.customer_id as string, d.after as number]),
+    );
     for (const a of actions) {
       if (a.kind === 'balance_query') {
         const hits = matchCustomers(khata, a.name_spoken);
@@ -590,7 +644,7 @@ export async function runTurn(transcript: string, session: Session, khata: Khata
           : 'You could not tell which customer they asked about. Ask which one.');
         continue;
       }
-      session.drafts.push(stageIntent(khata, a, seq()));
+      session.drafts.push(stageIntent(khata, a, seq(), projected));
     }
     notes.push(...queries);
   };

@@ -14,7 +14,7 @@ import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { normalizeKhata, runTurn } from '../src/agent/agent';
+import { deriveBalance, normalizeKhata, runTurn } from '../src/agent/agent';
 import { KEY, setSink } from '../src/agent/sarvam';
 import { newSession, type Khata, type Session, type Turn } from '../src/agent/types';
 import { SEED } from '../src/db/seed';
@@ -166,6 +166,44 @@ const SCENES: Scene[] = [
     },
   },
   {
+    name: 'overpay',
+    why: 'overpaying leaves CREDIT, and a later purchase spends it instead of re-billing it',
+    // Abdul owes 85. He pays 200, so the shop owes him 115. He then takes 50 of
+    // goods, which must come out of that credit -> shop still owes 65.
+    // A ledger that clamps the overpayment to zero would say he owes 50 — money
+    // he already handed over. Found by review; this scene is why it stays fixed.
+    turns: ['अब्दुल ने दो सौ रुपये दे दिए', 'हाँ', 'अब्दुल को पचास रुपये का सामान दे दिया', 'हाँ'],
+    expect: (_t, k) => {
+      const abdul = k.customers.find((c) => c.id === 'c3');
+      if (!abdul) throw new Error('no Abdul');
+      if (abdul.balance !== -65) throw new Error(`expected -65 (shop owes him 65), got ${abdul.balance}`);
+      // The invariant that matters: stored history must reproduce the balance.
+      if (deriveBalance(abdul.entries) !== abdul.balance) {
+        throw new Error(`balance ${abdul.balance} does not match the fold ${deriveBalance(abdul.entries)}`);
+      }
+    },
+  },
+  {
+    name: 'sameperson',
+    why: 'the same customer twice in one breath — the second line must follow the first, not the pre-turn balance',
+    turns: ['रमेश कुमार ने सौ दिए और रमेश कुमार को पचास का सामान भी दे दो', 'हाँ'],
+    expect: ([t1], k) => {
+      const c1 = k.customers.find((c) => c.id === 'c1');
+      if (!c1) throw new Error('no Ramesh Kumar');
+      // 500 - 100 = 400, then 400 + 50 = 450. Pricing both off 500 would preview 550.
+      if (c1.balance !== 450) throw new Error(`expected 500-100+50=450, got ${c1.balance}`);
+      if (deriveBalance(c1.entries) !== c1.balance) throw new Error('entries do not reproduce the balance');
+      // Every stored row must be consistent with the fold, since this is what the
+      // merchant reads back in the passbook.
+      let running = 0;
+      for (const e of c1.entries) {
+        running = deriveBalance([...c1.entries.slice(0, c1.entries.indexOf(e) + 1)]);
+        if (e.after !== running) throw new Error(`entry after=${e.after} but fold says ${running}`);
+      }
+      if (t1.drafts.length !== 2) throw new Error(`expected 2 drafts, got ${t1.drafts.length}`);
+    },
+  },
+  {
     name: 'english',
     why: 'English in -> English out, same machine',
     turns: ['Kavita took three hundred and fifty rupees of goods'],
@@ -188,6 +226,7 @@ const money = (n: number | null | undefined) => (n === null || n === undefined ?
 async function main() {
   let passed = 0;
   const failures: string[] = [];
+  const skipped: string[] = [];
 
   console.log(`\n  Munshi agent — scripted conversation, no mic, no STT`);
   console.log(`  ${chosen.length} scene${chosen.length === 1 ? '' : 's'}\n${'='.repeat(94)}`);
@@ -221,14 +260,22 @@ async function main() {
       passed++;
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.log(`\n  \x1b[31mFAIL\x1b[0m ${scene.name}: ${msg}`);
-      failures.push(`${scene.name}: ${msg}`);
+      // A dropped connection is not a failed assertion. Reported identically,
+      // it reads as a regression and sends you hunting for a bug that isn't there.
+      if (/fetch failed|ENOTFOUND|ECONNRESET|ETIMEDOUT|socket hang up/i.test(msg)) {
+        console.log(`\n  \x1b[33mSKIP\x1b[0m ${scene.name}: network — ${msg}`);
+        skipped.push(`${scene.name}: ${msg}`);
+      } else {
+        console.log(`\n  \x1b[31mFAIL\x1b[0m ${scene.name}: ${msg}`);
+        failures.push(`${scene.name}: ${msg}`);
+      }
     }
   }
 
   console.log(`\n${'='.repeat(94)}`);
-  console.log(`  ${passed}/${chosen.length} scenes passed`);
+  console.log(`  ${passed}/${chosen.length} scenes passed${skipped.length ? `, ${skipped.length} skipped (network)` : ''}`);
   for (const f of failures) console.log(`  \x1b[31m·\x1b[0m ${f}`);
+  for (const s2 of skipped) console.log(`  \x1b[33m·\x1b[0m ${s2}`);
   console.log(`  verbatim Sarvam traffic: ${LOG}\n`);
   process.exit(failures.length ? 1 : 0);
 }

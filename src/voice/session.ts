@@ -40,6 +40,8 @@ export class VoiceSession {
   private stt: SttSocket | null = null;
   private session: Session = newSession();
   private endTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Held on the instance so dispose() can close a reply that is still streaming. */
+  private tts: TtsSocket | null = null;
   private busy = false;
   private held = false;
 
@@ -71,6 +73,11 @@ export class VoiceSession {
 
     const ok = await this.audio.prepare();
     if (!ok) { this.held = false; return; }
+
+    // A quick tap can release BEFORE prepare() resolves. Without this check the
+    // mic would open with no finger down and no pending release to close it —
+    // which is precisely the guarantee hold-to-talk exists to provide.
+    if (!this.held) return;
 
     // Cut any playback the moment they start talking over it.
     this.audio.stopPlayback();
@@ -111,8 +118,12 @@ export class VoiceSession {
   }
 
   private async fire(): Promise<void> {
+    // Check busy BEFORE take(): take() clears the buffered transcript, so a stale
+    // timer firing during an in-flight turn would swallow whatever the merchant
+    // has said since, and they would just see themselves being ignored.
+    if (this.busy) return;
     const text = this.stt?.take() ?? '';
-    if (!text || this.busy) return;
+    if (!text) return;
     await this.turn(text, true);
   }
 
@@ -125,7 +136,7 @@ export class VoiceSession {
     let tts: TtsSocket | null = null;
     if (speak) {
       this.audio.beginSpeaking();
-      tts = new TtsSocket({
+      tts = this.tts = new TtsSocket({
         onAudio: (bytes) => this.audio.pushAudio(bytes),
         onDone: () => this.audio.endSpeaking(),
         onError: (msg) => this.cb.onView({ error: msg }),
@@ -154,6 +165,7 @@ export class VoiceSession {
       tts?.close();
       this.audio.stopPlayback();
     } finally {
+      if (this.tts === tts) this.tts = null;
       this.busy = false;
       this.cb.onView({ state: this.held ? 'listening' : 'idle' });
     }
@@ -162,6 +174,10 @@ export class VoiceSession {
   async dispose(): Promise<void> {
     if (this.endTimer) clearTimeout(this.endTimer);
     this.stt?.close();
+    // Without this, unmounting mid-reply leaves Bulbul streaming to nobody until
+    // its own 25s guard fires.
+    this.tts?.close();
+    this.tts = null;
     await this.audio.dispose();
   }
 }

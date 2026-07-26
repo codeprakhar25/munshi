@@ -96,8 +96,19 @@ safe later.
 **Decision:** `react-native-audio-api` (Software Mansion).
 **Over:** LiveKit, `expo-audio`.
 
-**`expo-audio` is disqualified outright** — it records to *files*. Streaming STT needs a live PCM
-stream, so there is nothing to feed the socket with.
+**`expo-audio`** — *corrected 2026-07-26.* An earlier draft of this section claimed it records only
+to files. That is true of `expo-av` and of older expo-audio, but **SDK 57's expo-audio ships an
+`AudioStream` API with an `onBuffer` callback delivering real-time PCM**, so it could feed the STT
+socket perfectly well. Capture is not the differentiator.
+
+What rules it out is **playback**. It plays from a file, so a streamed reply would have to be
+buffered in full, written to a WAV, and then played — throwing away Bulbul's ~163ms-to-first-audio
+and making the jitter buffer pointless. `react-native-audio-api` gives a real Web Audio graph, so
+chunks are scheduled onto a timeline as they arrive.
+
+Worth keeping in mind as the **fallback**: if the native audio graph fights us on a device, an
+expo-audio build with buffer-then-play costs latency but not correctness, and `src/voice/audio.ts`
+is the only file that would change.
 
 **Why `react-native-audio-api`.** It implements Web Audio on React Native, so the browser POC ports
 almost directly:

@@ -177,7 +177,12 @@ function PersonRow({ c, open, onPress }: { c: Customer; open: boolean; onPress: 
           <Text className="text-xs text-neutral-500">{c.name_en}{c.phone ? ` · ${c.phone}` : ''}</Text>
         </View>
         <Text className={`text-base font-bold ${c.balance > 0 ? 'text-red-600' : 'text-green-700'}`}>
-          {c.balance > 0 ? `₹${c.balance.toLocaleString('en-IN')}` : '✓'}
+          {/* Negative = they overpaid and the SHOP owes them; never render that as a debt. */}
+          {c.balance > 0
+            ? `₹${c.balance.toLocaleString('en-IN')}`
+            : c.balance < 0
+              ? `जमा ₹${Math.abs(c.balance).toLocaleString('en-IN')}`
+              : '✓'}
         </Text>
       </View>
 

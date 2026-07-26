@@ -30,7 +30,7 @@ export interface JitterOptions {
   /** Current audio-clock time, in seconds. */
   now: () => number;
   /** Hand a PCM buffer to the audio graph, to start at `at` seconds on the same clock. */
-  schedule: (samples: Float32Array, at: number) => void;
+  schedule: (samples: Float32Array<ArrayBuffer>, at: number) => void;
 }
 
 export interface JitterStats {
@@ -43,7 +43,7 @@ export interface JitterStats {
 }
 
 export class JitterBuffer {
-  private queue: Float32Array[] = [];
+  private queue: Float32Array<ArrayBuffer>[] = [];
   private queued = 0;
   private playhead = 0;
   private started = false;
@@ -61,7 +61,7 @@ export class JitterBuffer {
   }
 
   /** Samples as they arrive off the socket, in order. */
-  push(samples: Float32Array): void {
+  push(samples: Float32Array<ArrayBuffer>): void {
     if (this.ended) return;
     this.queue.push(samples);
     this.queued += samples.length;
@@ -120,7 +120,7 @@ export class JitterBuffer {
     this.stats.bufferedMs = (this.queued / this.o.sampleRate) * 1000;
   }
 
-  private drain(n: number): Float32Array {
+  private drain(n: number): Float32Array<ArrayBuffer> {
     const out = new Float32Array(Math.min(n, this.queued));
     let off = 0;
     while (off < out.length && this.queue.length) {
