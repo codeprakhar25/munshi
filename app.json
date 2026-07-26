@@ -10,6 +10,9 @@
     "ios": {
       "icon": "./assets/expo.icon",
       "infoPlist": {
+        "NSContactsUsageDescription": "Munshi needs your contacts so it can match names you speak or scan to the right customer.",
+        "NSCameraUsageDescription": "Munshi needs camera access to photograph khata pages or receipts.",
+        "NSPhotoLibraryUsageDescription": "Munshi needs photo access to pick a khata page or receipt to scan.",
         "NSMicrophoneUsageDescription": "Munshi listens so you can update your khata by speaking instead of typing."
       }
     },
@@ -27,7 +30,9 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MICROPHONE",
         "android.permission.INTERNET",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS"
       ],
       "package": "com.ommthegreat.munshi"
     },
@@ -45,7 +50,21 @@
           "imageWidth": 76
         }
       ],
-      "react-native-audio-api"
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Munshi needs your contacts so it can match names you speak or scan to the right customer."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Munshi needs photo access to let you pick a khata page or receipt to scan.",
+          "cameraPermission": "Munshi needs camera access to photograph a khata page or receipt to scan."
+        }
+      ],
+      "expo-document-picker",
+          "react-native-audio-api"
     ],
     "experiments": {
       "typedRoutes": true,

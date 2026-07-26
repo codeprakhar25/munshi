@@ -46,6 +46,7 @@ export class VoiceAudio {
   /** False while the agent is speaking — see the half-duplex note above. */
   private transmit = true;
   private recording = false;
+  private idleWaiters: Array<() => void> = [];
 
   readonly playbackRate: number;
   readonly deviceRate: number;
@@ -184,7 +185,19 @@ export class VoiceAudio {
   setTransmit(on: boolean): void {
     if (this.transmit !== on) log('mic_gate', { open: on });
     this.transmit = on;
+    if (on && this.idleWaiters.length) {
+      const waiters = this.idleWaiters;
+      this.idleWaiters = [];
+      for (const w of waiters) w();
+    }
   }
+
+  /** Resolves when playback gate reopens (safe to listen again). */
+  waitForIdle(): Promise<void> {
+    if (this.transmit) return Promise.resolve();
+    return new Promise((resolve) => { this.idleWaiters.push(resolve); });
+  }
+
   get jitterStats() { return this.jitter?.stats ?? null; }
 
   async dispose(): Promise<void> {

@@ -1,9 +1,8 @@
 /**
  * The turn loop, on the device: mic -> Saaras -> agent -> Bulbul -> speaker.
  *
- * Owns the wiring and nothing else. All money logic lives in `@/agent`, all
- * audio specifics in `@/voice/audio`, so this file stays small enough to read in
- * one sitting when something misbehaves on stage.
+ * Tap-to-talk keeps the mic open between turns (Saaras END_SPEECH ends each
+ * utterance). Overlay API: startConversation / stopConversation / bargeIn.
  */
 import { runTurn } from '@/agent/agent';
 import { log } from '@/agent/sarvam';
@@ -55,6 +54,7 @@ export class VoiceSession {
 
   setKhata(k: Khata): void { this.khata = k; }
   get conversation(): Session { return this.session; }
+  get conversationSession(): Session { return this.session; }
 
   /** Clears pending drafts and dialogue memory — the between-demos reset. */
   resetConversation(): void {
@@ -191,6 +191,7 @@ export class VoiceSession {
         this.cb.onView({ state: 'speaking' });
         const tSpeak = Date.now();
         await tts.speak(turn.reply);
+        await this.audio.waitForIdle();
         log('latency_turn', {
           debounce_ms: sinceRelease,
           route_ms: turn.timings.route_ms,

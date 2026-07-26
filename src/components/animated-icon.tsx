@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import * as SplashScreen from 'expo-splash-screen';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Dimensions, StyleSheet, View } from 'react-native';
 import Animated, { Easing, Keyframe } from 'react-native-reanimated';
 import { scheduleOnRN } from 'react-native-worklets';
@@ -11,6 +11,23 @@ const DURATION = 600;
 export function AnimatedSplashOverlay() {
   const [animate, setAnimate] = useState(false);
   const [visible, setVisible] = useState(true);
+  const settled = useRef(false);
+
+  console.log('[Splash] render', { animate, visible });
+
+  // Safety net: if onLayout never fires or SplashScreen.hideAsync() hangs
+  // (both observed as real failure modes), force the transition after 2.5s
+  // instead of blocking the whole app behind an opaque overlay forever.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!settled.current) {
+        console.log('[Splash] TIMEOUT fallback firing — onLayout/hideAsync never resolved');
+        settled.current = true;
+        setAnimate(true);
+      }
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
 
   if (!visible) return null;
 
@@ -40,6 +57,7 @@ export function AnimatedSplashOverlay() {
       entering={splashKeyframe.duration(DURATION).withCallback((finished) => {
         'worklet';
         if (finished) {
+          console.log('[Splash] keyframe finished, hiding overlay');
           scheduleOnRN(setVisible, false);
         }
       })}
@@ -49,9 +67,17 @@ export function AnimatedSplashOverlay() {
   ) : (
     <View
       onLayout={() => {
-        SplashScreen.hideAsync().finally(() => {
-          setAnimate(true);
-        });
+        console.log('[Splash] onLayout fired, calling SplashScreen.hideAsync()');
+        SplashScreen.hideAsync()
+          .then(() => console.log('[Splash] hideAsync resolved'))
+          .catch((err) => console.log('[Splash] hideAsync REJECTED', err))
+          .finally(() => {
+            if (!settled.current) {
+              settled.current = true;
+              console.log('[Splash] setAnimate(true)');
+              setAnimate(true);
+            }
+          });
       }}
       style={styles.splashOverlay}>
       {image}

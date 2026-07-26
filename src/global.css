@@ -2,10 +2,33 @@
 @import 'tailwindcss/preflight.css' layer(base);
 @import 'tailwindcss/utilities.css';
 
+/* Porcelain ledger — match final_version.html */
+@theme {
+  --color-accent: #d97706;
+  --color-accent-soft: #fef3c7;
+  --color-saffron: #f59e0b;
+  --color-saffron-deep: #b45309;
+  --color-danger: #e11d48;
+  --color-danger-soft: #ffe4e6;
+  --color-success: #15803d;
+  --color-success-soft: #dcfce7;
+  --color-ink: #1c1917;
+  --color-muted: #78716c;
+  --color-line: #e7e5e4;
+  --color-surface: #ffffff;
+  --color-app-bg: #fbf9f6;
+  --color-paper: #fbf9f6;
+  --color-paper-2: #f5f0e8;
+  --color-rose: #e11d48;
+  --color-leaf: #15803d;
+}
+
 :root {
   --font-display:
-    Spline Sans, Inter, ui-sans-serif, system-ui, sans-serif, Apple Color Emoji, Segoe UI Emoji,
-    Segoe UI Symbol, Noto Color Emoji;
+    Urbanist, Spline Sans, Inter, ui-sans-serif, system-ui, sans-serif, Apple Color Emoji,
+    Segoe UI Emoji, Segoe UI Symbol, Noto Color Emoji;
+  --font-body:
+    Roboto, 'Noto Sans Devanagari', 'Noto Sans Tamil', ui-sans-serif, system-ui, sans-serif;
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
   --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
