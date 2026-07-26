@@ -40,10 +40,23 @@ const SPECIAL: [RegExp, number][] = [
  * Returns rupees, or null when unrecognised — null means "ask the model", never
  * "assume zero". Guessing at money is the one thing this system must not do.
  */
+/** Devanagari, Bengali, Gurmukhi, Gujarati, Odia, Tamil, Telugu, Kannada, Malayalam. */
+const INDIC_DIGITS: [number, number][] = [
+  [0x0966, 0x096f], [0x09e6, 0x09ef], [0x0a66, 0x0a6f], [0x0ae6, 0x0aef],
+  [0x0b66, 0x0b6f], [0x0be6, 0x0bef], [0x0c66, 0x0c6f], [0x0ce6, 0x0cef], [0x0d66, 0x0d6f],
+];
+
+const toAsciiDigits = (t: string): string =>
+  t.replace(/[\u0966-\u0d6f]/g, (ch) => {
+    const cp = ch.codePointAt(0)!;
+    for (const [lo, hi] of INDIC_DIGITS) if (cp >= lo && cp <= hi) return String(cp - lo);
+    return ch;
+  });
+
 export function parseAmount(input: string): number | null {
   // Commas are DELETED, not spaced: "1,250" spaced becomes "1 250" and the digit
   // match then reads 1. Off by a factor of a thousand, on a ledger.
-  const text = input.toLowerCase().replace(/,/g, '').replace(/₹/g, ' ').replace(/\s+/g, ' ').trim();
+  const text = toAsciiDigits(input).toLowerCase().replace(/,/g, '').replace(/₹/g, ' ').replace(/\s+/g, ' ').trim();
   if (!text) return null;
 
   for (const [re, v] of SPECIAL) if (re.test(text)) return v;

@@ -1,4 +1,4 @@
-import type { Khata } from '@/agent/types';
+import type { Entry, Khata } from '@/agent/types';
 
 /**
  * Demo ledger. Seeded into AsyncStorage on first run; resetKhata() restores it.
@@ -7,10 +7,39 @@ import type { Khata } from '@/agent/types';
  * genuinely ambiguous, which is what exercises the pick_person path instead of
  * leaving it theoretical.
  *
- * Balances here are opening figures; normalizeKhata() turns each into an
- * `opening` entry so balance stays derived from the passbook.
+ * Each customer gets a scripted passbook (HISTORY below) whose fold equals the
+ * `balance` figure on the row — so the person screen opens onto a lived-in
+ * timeline instead of a single synthetic "opening" entry.
  */
-export const SEED: Khata = {
+
+/** [daysAgo, action, amount, label] — before/after and timestamps are derived. */
+type HistoryRow = [number, 'new_udhaar' | 'payment', number, string];
+
+const HISTORY: Record<string, HistoryRow[]> = {
+  c1: [[12, 'new_udhaar', 120, 'दूध'], [9, 'new_udhaar', 260, 'चीनी'], [5, 'new_udhaar', 320, 'दूध-दही'], [2, 'payment', 200, 'जमा']],
+  c2: [[14, 'new_udhaar', 480, 'आटा'], [10, 'new_udhaar', 350, 'तेल'], [6, 'new_udhaar', 620, 'किराना सामान'], [3, 'payment', 200, 'जमा']],
+  c3: [[8, 'new_udhaar', 45, 'बीड़ी'], [4, 'new_udhaar', 60, 'माचिस-बीड़ी'], [1, 'payment', 20, 'जमा']],
+  c4: [[11, 'new_udhaar', 180, 'साबुन'], [7, 'new_udhaar', 150, 'शैम्पू'], [4, 'new_udhaar', 250, 'किराना'], [2, 'payment', 150, 'जमा']],
+  c5: [[15, 'new_udhaar', 900, 'चावल'], [9, 'new_udhaar', 700, 'दाल-चावल'], [5, 'new_udhaar', 800, 'किराना सामान'], [3, 'payment', 300, 'जमा']],
+  c6: [[6, 'new_udhaar', 120, 'नमकीन'], [3, 'new_udhaar', 95, 'गुटखा'], [1, 'new_udhaar', 60, 'नमकीन']],
+  c7: [[10, 'new_udhaar', 240, 'बिस्कुट-चाय'], [6, 'new_udhaar', 180, 'चाय पत्ती'], [2, 'new_udhaar', 200, 'बिस्कुट'], [2, 'payment', 100, 'जमा']],
+  c8: [[9, 'new_udhaar', 200, 'चाय पत्ती'], [5, 'new_udhaar', 240, 'किराना'], [2, 'payment', 100, 'जमा']],
+};
+
+function entriesFor(id: string): Entry[] {
+  const rows = HISTORY[id] ?? [];
+  let bal = 0;
+  return rows.map(([daysAgo, action, amount, label], i) => {
+    const before = bal;
+    bal = action === 'payment' ? bal - amount : bal + amount;
+    // Shop hours, morning-ish, minutes varied so same-day rows keep their order.
+    const ts = new Date(Date.now() - daysAgo * 86_400_000);
+    ts.setHours(9 + (i % 3) * 2, 10 + i * 7, 0, 0);
+    return { ts: ts.toISOString(), action, amount, before, after: bal, label };
+  });
+}
+
+const RAW: Khata = {
   "shop": "राज किराना स्टोर",
   "currency": "INR",
   "customers": [
@@ -141,4 +170,9 @@ export const SEED: Khata = {
     }
   ],
   "audit": []
+};
+
+export const SEED: Khata = {
+  ...RAW,
+  customers: RAW.customers.map((c) => ({ ...c, entries: entriesFor(c.id) })),
 };

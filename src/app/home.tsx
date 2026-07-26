@@ -3,12 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, View as RNView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { Customer, Khata } from '@/agent/types';
-import { PersonSheet } from '@/components/home/PersonSheet';
+import type { Khata } from '@/agent/types';
 import { AmbientBackdrop, Gradient, PressScale, Rise, useBreath, useCountUp } from '@/components/ui/motion';
 import { VoiceOverlay } from '@/components/voice/VoiceOverlay';
 import { AppFonts, Porcelain } from '@/constants/theme';
-import { loadKhata, totalDue } from '@/db/khata';
+import { loadKhata, resetKhata, totalDue } from '@/db/khata';
 import { persistPeopleIntoKhata } from '@/lib/khata-sync';
 import { useStrings } from '@/lib/i18n';
 import { Pressable, ScrollView, Text, View } from '@/tw';
@@ -24,7 +23,6 @@ export default function HomeScreen() {
   const t = useStrings(language);
   const [khata, setKhata] = useState<Khata | null>(null);
   const [voiceOpen, setVoiceOpen] = useState(false);
-  const [person, setPerson] = useState<Customer | null>(null);
   const [view, setView] = useState<VoiceView>({
     state: 'idle', heard: '', reply: '', stage: 'idle', drafts: [], error: null,
   });
@@ -57,17 +55,20 @@ export default function HomeScreen() {
 
   const openVoice = useCallback(async () => {
     setVoiceOpen(true);
-    const greet =
-      language === 'en'
-        ? 'Namaste. Say a name and amount — like Rajesh doodh 50.'
-        : 'नमस्ते। नाम और रकम बोलो — जैसे राजेश दूध पचास।';
-    await voice.current?.startConversation(greet);
-  }, [language]);
+    // Just "ji boliye". A long scripted opener is dead air on every single
+    // activation, and reciting an example in English sets the merchant up to
+    // reply in English when the whole point is that they speak however they like.
+    await voice.current?.startConversation('जी बोलिए');
+  }, []);
 
   const closeVoice = useCallback(async () => {
-    await voice.current?.stopConversation();
+    // Dismiss the UI first — audio teardown must never hold the overlay open.
     setVoiceOpen(false);
-    setView((v) => ({ ...v, state: 'idle', heard: '', drafts: v.drafts }));
+    setView({ state: 'idle', heard: '', reply: '', stage: 'idle', drafts: [], error: null });
+    await voice.current?.stopConversation();
+    // Reset the conversation so the next tap starts a fresh session — pending
+    // (unconfirmed) drafts die with the overlay, exactly like the mock.
+    voice.current?.resetConversation();
   }, []);
 
   const due = khata ? totalDue(khata) : 0;
@@ -82,10 +83,17 @@ export default function HomeScreen() {
     );
   }
 
+  // Most recently touched first: after speaking an entry the merchant looks at
+  // the top of the list to check it, and a balance-ordered list buries it.
+  const lastTouched = (c: (typeof khata.customers)[number]) =>
+    c.entries.length ? c.entries[c.entries.length - 1].ts : '';
   const owing = khata.customers
-    .filter((c) => c.balance > 0)
+    .filter((c) => c.balance !== 0)
     .slice()
-    .sort((a, b) => b.balance - a.balance);
+    .sort((a, b) => {
+      const t = lastTouched(b).localeCompare(lastTouched(a));
+      return t !== 0 ? t : b.balance - a.balance;
+    });
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }} edges={['top']}>
@@ -94,9 +102,19 @@ export default function HomeScreen() {
       <AmbientBackdrop image="radial-gradient(circle at 0% 100%, #e0e7ff 0%, rgba(224,231,255,0) 45%)" />
 
       <View className="flex-row items-center justify-between px-5 pb-2 pt-2">
-        <Text className="text-ink" style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 26, letterSpacing: -0.8 }}>
-          Munshi
-        </Text>
+        {/* Long-press: restore the seed ledger — the between-demos reset. */}
+        <Pressable
+          onLongPress={() => {
+            void resetKhata().then((k) => {
+              setKhata(k);
+              voice.current?.setKhata(k);
+              voice.current?.resetConversation();
+            });
+          }}>
+          <Text className="text-ink" style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 26, letterSpacing: -0.8 }}>
+            Munshi
+          </Text>
+        </Pressable>
         <View className="flex-row gap-1.5">
           <PressScale
             onPress={() => router.push('/onboarding/map')}
@@ -178,7 +196,7 @@ export default function HomeScreen() {
           <View className="gap-2">
             {owing.map((c, i) => (
               <Rise key={c.id} index={3 + Math.min(i, 4)}>
-                <PressScale scaleTo={0.985} onPress={() => setPerson(c)} style={styles.row}>
+                <PressScale scaleTo={0.985} onPress={() => router.push(`/person/${c.id}`)} style={styles.row}>
                   <View
                     className="h-11 w-11 items-center justify-center rounded-2xl"
                     style={{ backgroundColor: Porcelain.paper2 }}>
@@ -191,7 +209,7 @@ export default function HomeScreen() {
                       {c.name}
                     </Text>
                     <Text className="text-xs text-muted" numberOfLines={1}>
-                      {c.phone || c.aliases[0] || '—'} · {t.entriesN(c.entries.length)}
+                      {c.entries[c.entries.length - 1]?.label || c.phone || c.aliases[0] || '—'} · {t.entriesN(c.entries.length)}
                     </Text>
                   </View>
                   <Text style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 19, color: Porcelain.rose }}>
@@ -204,37 +222,36 @@ export default function HomeScreen() {
         )}
       </ScrollView>
 
-      <Text
-        className="absolute bottom-28 self-center text-xs font-bold uppercase tracking-widest text-muted"
-        style={{ fontFamily: AppFonts.displayBold }}>
-        {t.talkMunshi}
-      </Text>
-
-      {/* Munshi FAB — breathing saffron halo behind, warm gradient wash over the face. */}
-      <RNView pointerEvents="box-none" style={styles.fabWrap}>
-        <Animated.View pointerEvents="none" style={[styles.fabHalo, fabHalo]}>
-          <Gradient
-            image="radial-gradient(circle at 50% 50%, rgba(245,158,11,0.4) 0%, rgba(245,158,11,0) 70%)"
-            style={StyleSheet.absoluteFill}
-          />
-        </Animated.View>
-        <PressScale scaleTo={0.94} onPress={openVoice} style={styles.fab}>
-          <Image source={require('../../assets/images/munshi-face.png')} style={{ width: '100%', height: '100%' }} />
-          <Gradient
-            pointerEvents="none"
-            image="linear-gradient(180deg, rgba(217,119,6,0) 45%, rgba(217,119,6,0.35) 100%)"
-            style={StyleSheet.absoluteFill}
-          />
-        </PressScale>
-      </RNView>
+      {/* FAB leaves the bottom while the overlay is up — the flying orb IS the face. */}
+      {!voiceOpen && (
+        <>
+          {/* Munshi FAB — breathing saffron halo behind, warm gradient wash over the face. */}
+          <RNView pointerEvents="box-none" style={styles.fabWrap}>
+            <Animated.View pointerEvents="none" style={[styles.fabHalo, fabHalo]}>
+              <Gradient
+                image="radial-gradient(circle at 50% 50%, rgba(245,158,11,0.4) 0%, rgba(245,158,11,0) 70%)"
+                style={StyleSheet.absoluteFill}
+              />
+            </Animated.View>
+            <PressScale scaleTo={0.94} onPress={openVoice} style={styles.fab}>
+              <Image source={require('../../assets/images/munshi-face.png')} style={{ width: '100%', height: '100%' }} />
+              <Gradient
+                pointerEvents="none"
+                image="linear-gradient(180deg, rgba(217,119,6,0) 45%, rgba(217,119,6,0.35) 100%)"
+                style={StyleSheet.absoluteFill}
+              />
+            </PressScale>
+          </RNView>
+        </>
+      )}
 
       <VoiceOverlay
         open={voiceOpen}
         view={view}
         onClose={closeVoice}
         onBargeIn={() => void voice.current?.bargeIn()}
+        fabCenterFromBottom={28 + 37}
       />
-      <PersonSheet customer={person} onClose={() => setPerson(null)} />
     </SafeAreaView>
   );
 }

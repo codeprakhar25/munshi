@@ -19,12 +19,15 @@
  */
 import { parseAmount } from './numbers';
 import { templateReply, replyLangFor, type ReplyContext } from './reply';
-import { chatTools, log, type ChatMessage, type ToolSchema } from './sarvam';
+import { chatTools, log, transliterate, type ChatMessage, type ToolSchema } from './sarvam';
 import type {
   Customer, Draft, DraftPerson, Entry, Khata, Session, Stage, Turn,
 } from './types';
 
 // ------------------------------------------------------------- matching -----
+
+/** Indic scripts other than Devanagari — unmatchable against the roster as-is. */
+export const FOREIGN_SCRIPT = /[\u0980-\u0DFF\u0A80-\u0AFF\u0A00-\u0A7F]/;
 
 /** Case/space normalization. Cross-script matching leans on `aliases` until §6 lands. */
 export const norm = (s: string): string =>
@@ -173,7 +176,10 @@ const LEDGER_TOOLS: ToolSchema[] = [{
               },
               name_spoken: {
                 type: 'string',
-                description: 'The person\'s name EXACTLY as the merchant said it, verbatim, in the script they used. Always fill this in whenever a name was spoken.',
+                description: 'The person\'s name COPIED CHARACTER FOR CHARACTER out of the user message. '
+                  + 'If the user message is in Devanagari the name must be in Devanagari, if Odia then Odia, if Latin then Latin. '
+                  + 'NEVER transliterate or romanise it: from "प्रखर ने सौ का आलू लिया" the name is "प्रखर", not "Prakhar". '
+                  + 'This name is written into the shopkeeper\'s book as-is. Always fill it in whenever a name was spoken.',
               },
               amount: {
                 type: 'number',
@@ -181,7 +187,10 @@ const LEDGER_TOOLS: ToolSchema[] = [{
               },
               label: {
                 type: 'string',
-                description: 'What was bought, if mentioned (doodh, sabun, milk). Omit otherwise.',
+                description:
+                  'What the money was for, if mentioned — copy it VERBATIM in the words and script spoken, all of it: '
+                  + 'a single item (doodh, sabun), a list (aalu pyaaz tamatar), or a category (kirana ka saaman, sabzi). '
+                  + 'Never translate it and never shorten a list to one item. Omit only when nothing was named.',
               },
               missing: {
                 type: 'string',
@@ -258,7 +267,11 @@ const PICK_TOOL: ToolSchema[] = [{
         choice: {
           type: 'string',
           enum: ['existing', 'new_person', 'unclear'],
-          description: 'existing = they picked somebody from the list offered. new_person = none of them, open a new khata. unclear = they did not answer the question.',
+          description: 'existing = they picked somebody from the list offered. '
+            + 'new_person = open a new khata: either they said none of the options match, OR they were asked '
+            + '"X is not in the book, open a new khata?" and simply agreed (haan, ha, ji, theek hai, yes, ok, kholo, likh do). '
+            + 'A bare yes when NO options were offered always means new_person. '
+            + 'unclear = they did not answer the question at all.',
         },
         customer_id: { type: 'string', description: 'For choice=existing: the id from the list offered, e.g. c1.' },
         name_spoken: { type: 'string', description: 'For choice=new_person: the name, verbatim.' },
@@ -332,12 +345,30 @@ Kavita owe?") that is one action of kind balance_query — never unclear.
 If one part of the command is unusable — no amount, or you cannot tell who — mark only
 that entry unclear and still act on the parts you did understand.
 
+When goods are named — an item, a list, or a category like "kirana ka saaman" — copy them
+into label exactly as spoken. The merchant reads the khata back later; the label is how
+they remember what a line was for.
+
 Report only the amount the merchant actually said. Never add, subtract or infer a number.
 The merchant speaks Hindi, English, or a mix of both.`;
 
 const SPEAK_SYSTEM = `You are the voice of a shopkeeper's udhaar-book assistant.
 The arithmetic has already been done for you and is given below as fact.
 Never compute, never round, never invent a number. Say only what the facts support.`;
+
+/**
+ * Naming the language explicitly matters: told only "use the same language the
+ * merchant used", the model answered an Odia speaker in broken Hinglish. Hindi
+ * and English are templated locally, so this list is the languages that actually
+ * reach the phrasing model.
+ */
+const LANG_NAME: Record<string, string> = {
+  'od-IN': 'Odia (ଓଡ଼ିଆ)', 'or-IN': 'Odia (ଓଡ଼ିଆ)',
+  'bn-IN': 'Bengali (বাংলা)', 'ta-IN': 'Tamil (தமிழ்)', 'te-IN': 'Telugu (తెలుగు)',
+  'mr-IN': 'Marathi (मराठी)', 'gu-IN': 'Gujarati (ગુજરાતી)', 'kn-IN': 'Kannada (ಕನ್ನಡ)',
+  'ml-IN': 'Malayalam (മലയാളം)', 'pa-IN': 'Punjabi (ਪੰਜਾਬੀ)', 'ur-IN': 'Urdu (اردو)',
+  'hi-IN': 'Hindi (हिन्दी)', 'en-IN': 'English',
+};
 
 // ---------------------------------------------------------------- drafts ----
 
@@ -377,6 +408,9 @@ export function stageIntent(
    *  only when this is the sole action — with several actions in one breath
    *  there is no way to know which one a stray number belongs to. */
   soleUtterance?: string,
+  /** True when the transcript was romanised — the model's id guess is then
+   *  unreliable, because it never saw the original script. */
+  romanised?: boolean,
 ): Draft {
   const kindIn = act?.kind ?? 'unclear';
   const spoken = act?.name_spoken?.trim() || null;
@@ -432,8 +466,15 @@ export function stageIntent(
   }
 
   if (draft.kind === 'new_customer' && draft.status !== 'needs_customer') {
-    price(draft, 0);
-    draft.amount = amount ?? 0;
+    // Assuming zero is a guess about money. Number words in Odia, Tamil, Bengali
+    // are not parsed locally, so a dropped amount used to open the khata at 0
+    // and lose the udhaar the merchant just dictated. Ask instead.
+    if (amount === null) {
+      draft.status = 'needs_amount';
+      draft.before = 0;
+      return draft;
+    }
+    draft.amount = amount;
     price(draft, 0);
     draft.kind = 'new_customer';
     draft.status = 'ready';
@@ -452,11 +493,47 @@ export function stageIntent(
     draft.options = byName.map(asPerson);
     draft.status = 'ambiguous';
     return draft;
-  } else if (byId) person = byId;
+  } else if (byId && !romanised) {
+    // Only trust the model's id when we had no better way to check. If the name
+    // WAS romanised and still matched nobody, that customer is not in the book,
+    // and the model's pick is the nearest-sounding roster entry — which is how
+    // "ସୁରେଶ" (Suresh) got credited to Sunita Devi.
+    person = byId;
+  } else if (byId && romanised) {
+    log('rejected_model_pick', { spoken, wouldHaveBeen: byId.id });
+  }
 
   if (!person) {
+    // A name we do not recognise is a NEW customer, so open the khata and write
+    // it — asking "whose name?" was a dead end the merchant could not get out of.
+    // Cost of this choice: a mis-transcription creates a junk row (प्रख्यात vs
+    // प्रखर), recoverable for one turn via `undo`.
+    if (spoken) {
+      log('auto_new_customer', { spoken, amount });
+      draft.kind = 'new_customer';
+      if (amount === null) { draft.status = 'needs_amount'; draft.before = 0; return draft; }
+      draft.amount = amount;
+      price(draft, 0);
+      draft.status = 'ready';
+      return draft;
+    }
     draft.status = 'needs_customer';
     return draft;
+  }
+
+  // Cross-script safety net. An Odia or Tamil name cannot be compared to a
+  // Devanagari roster, so `byName` is empty and we are trusting the model's pick
+  // alone — and the model cannot tell us a name was ambiguous, it just chooses.
+  // With no approval step that would be a silent write to the wrong person, so
+  // check whether the customer it picked shares a first name with anybody else.
+  if (!byName.length && person) {
+    const siblings = matchCustomers(khata, person.aliases?.[0] ?? person.name);
+    if (siblings.length > 1) {
+      log('cross_script_ambiguous', { spoken, picked: person.id, siblings: siblings.map((c) => c.id) });
+      draft.options = siblings.map(asPerson);
+      draft.status = 'ambiguous';
+      return draft;
+    }
   }
 
   draft.customer_id = person.id;
@@ -564,6 +641,24 @@ export function commitDrafts(khata: Khata, drafts: Draft[]): Turn['committed'] {
   return committed;
 }
 
+/**
+ * Undo the entries a set of drafts just wrote. Entries are append-only in
+ * spirit, but an immediate correction is not history — it is the merchant
+ * fixing what they just said, and leaving both rows in the passbook would show
+ * money that never moved.
+ */
+export function reverseCommitted(khata: Khata, drafts: Draft[]): void {
+  for (const d of drafts) {
+    const cust = khata.customers.find((c) => c.id === d.customer_id);
+    if (!cust || !cust.entries.length) continue;
+    cust.entries.pop();
+    cust.balance = deriveBalance(cust.entries);
+    for (let i = khata.audit.length - 1; i >= 0; i--) {
+      if (khata.audit[i].customer_id === cust.id) { khata.audit.splice(i, 1); break; }
+    }
+  }
+}
+
 // ----------------------------------------------------------------- reply ----
 
 /**
@@ -603,23 +698,31 @@ function draftFacts(d: Draft): string {
     }
     case 'ambiguous':
       return `The name "${d.name_spoken}" matches more than one person: ${d.options.map((o) => `${o.name_en} (owes ${o.balance})`).join(', ')}.`
-        + ' Ask WHICH ONE, naming them. Do not state any new balance.';
+        + ' Ask WHICH ONE, naming them, and mention they can say it is a NEW person instead.'
+        + ' Do not state any new balance.';
     case 'needs_amount':
       return `${who} currently owes ${d.before ?? 0} rupees. The merchant did NOT say how many rupees. Ask how much. Do NOT state any new balance.`;
     case 'needs_customer':
-      return `You could not tell WHICH customer "${d.name_spoken ?? ''}" is. Ask which customer, by name. Do NOT state any balance.`;
+      return d.name_spoken
+        ? `"${d.name_spoken}" is not in the book at all. Ask whether to open a NEW khata for them. Do NOT state any balance.`
+        : 'You could not tell which customer they meant. Ask whose name it is. Do NOT state any balance.';
     default:
       return 'You did not understand the command. Ask the merchant to repeat it simply, for example "Ramesh ne 200 diye".';
   }
 }
 
-async function composeReply(facts: string, transcript: string, terse: boolean): Promise<string> {
+async function composeReply(facts: string, transcript: string, terse: boolean, langCode?: string | null): Promise<string> {
   const messages: ChatMessage[] = [
     { role: 'system', content: SPEAK_SYSTEM },
     {
       role: 'user',
       // Every extra word is another second the merchant stands there waiting.
       content: `The merchant said: "${transcript}"\n\nFacts you must use:\n${facts}`
+        // Name the language rather than saying "the same one" — the model does
+        // not reliably infer it from a non-Devanagari script and drifts to Hinglish.
+        + (langCode && LANG_NAME[langCode]
+          ? `\n\nYou MUST reply in ${LANG_NAME[langCode]}, in that language's own script. Not Hindi, not English.`
+          : '')
         + (terse ? '\n\nKeep it to 10 words or fewer.' : ''),
     },
   ];
@@ -661,7 +764,7 @@ async function extract(transcript: string, khata: Khata, session: Session) {
     // again" to a sentence it understood perfectly well. There is no outcome where
     // we don't want an actions array: `unclear` already covers "couldn't parse it".
     tool_choice: { type: 'function', function: { name: 'apply_ledger_actions' } },
-    max_tokens: 1500,
+    max_tokens: 2500,
     label: 'extract',
   });
   const actions = calls[0]?.args?.actions;
@@ -674,8 +777,10 @@ async function extract(transcript: string, khata: Khata, session: Session) {
  * under Node with no phone attached.
  */
 export interface TurnOptions {
-  /** Saaras' detected language, so replies can be templated locally. */
+  /** Saaras' detected language for this utterance. */
   lang?: string | null;
+  /** The language the merchant chose at onboarding — the default to answer in. */
+  appLang?: string | null;
   /** Fired as soon as drafts are known — lets the UI paint ~seconds before the voice. */
   onStaged?: (drafts: Draft[], stage: Stage) => void;
 }
@@ -695,7 +800,22 @@ export async function runTurn(
   const seq = () => `d${session.drafts.length + 1}_${Date.now().toString(36)}`;
 
   const stageFresh = async (text: string) => {
-    const actions = await extract(text, khata, session);
+    // Asked to read an Odia sentence against a Devanagari roster, the model
+    // transliterates the name ITSELF and mangles it on the way — "ସୁରେଶ" came
+    // back as "सुनील", which then matched nobody (or worse, matched Sunita).
+    // Romanising the whole transcript first means the model never crosses
+    // scripts: it sees Latin, and Latin compares directly to name_en.
+    let text2 = text;
+    let romanised = false;
+    if (FOREIGN_SCRIPT.test(text)) {
+      const r = await transliterate(text, opts.lang ?? 'od-IN', 'en-IN');
+      if (r) {
+        log('romanised_transcript', { from: text, to: r });
+        text2 = r;
+        romanised = true;
+      }
+    }
+    const actions = await extract(text2, khata, session);
     const queries: string[] = [];
     // Running balances for anyone already touched by a draft this turn, so a
     // second mention of the same person chains off the first.
@@ -712,7 +832,7 @@ export async function runTurn(
           : 'You could not tell which customer they asked about. Ask which one.');
         continue;
       }
-      session.drafts.push(stageIntent(khata, a, seq(), projected, actions.length === 1 ? text : undefined));
+      session.drafts.push(stageIntent(khata, a, seq(), projected, actions.length === 1 ? text2 : undefined, romanised));
     }
     notes.push(...queries);
   };
@@ -725,7 +845,7 @@ export async function runTurn(
           { role: 'user', content: transcript },
         ],
         RESOLVE_TOOL,
-        { tool_choice: { type: 'function', function: { name: 'resolve_draft' } }, max_tokens: 900, label: 'resolve' },
+        { tool_choice: { type: 'function', function: { name: 'resolve_draft' } }, max_tokens: 2000, label: 'resolve' },
       );
       const decision = calls[0]?.args?.decision ?? 'new_command';
 
@@ -789,12 +909,26 @@ export async function runTurn(
         }
       } else if (focus && a.choice === 'new_person') {
         focus.kind = 'new_customer';
+        // Keep the name we already heard: answering "haan" carries no name, and
+        // overwriting it with undefined loses the customer entirely.
         focus.name_spoken = a.name_spoken ?? focus.name_spoken;
         focus.options = [];
         focus.status = focus.amount === null ? 'needs_amount' : 'ready';
         if (focus.status === 'ready') price(focus, 0); else focus.before = 0;
       } else {
-        notes.push('They did not answer which person. Ask again, briefly, naming the options.');
+        // No escape from this stage was the actual loop: an unanswered "which
+        // one?" just asked again, forever, and the merchant could not get out by
+        // saying anything else. Two strikes, then treat the utterance as a fresh
+        // command — abandoning a draft costs nothing, since nothing was written.
+        session.stuck = (session.stuck ?? 0) + 1;
+        if (session.stuck >= 2) {
+          log('pick_gave_up', { transcript, after: session.stuck });
+          session.drafts = [];
+          session.stuck = 0;
+          await stageFresh(transcript);
+        } else {
+          notes.push('They did not answer which person. Ask again, briefly, naming the options.');
+        }
       }
       break;
     }
@@ -829,11 +963,58 @@ export async function runTurn(
       break;
     }
 
-    default:
+    default: {
+      // Nothing is pending, but something may have JUST been written. A negation
+      // now is the merchant correcting that, not a new command — without an
+      // approval step this is the only way back.
+      const CORRECTION = /नहीं|नही|गलत|हटा|nahi|nahin|\bno\b|galat|hatao|wrong|cancel/i;
+      if (session.undo?.drafts.length && CORRECTION.test(transcript)) {
+        const prior = session.undo.drafts;
+        session.undo = null;
+        reverseCommitted(khata, prior);
+        session.drafts = prior.map((d) => ({ ...d }));
+        // Re-price against the restored balances, then let resolve_draft amend.
+        for (const d of session.drafts) {
+          const c = khata.customers.find((x) => x.id === d.customer_id);
+          if (c) { d.person = asPerson(c); price(d, c.balance); }
+        }
+        log('undo_reopened', { drafts: session.drafts.length });
+        session.stage = 'confirming';
+        return runTurn(transcript, session, khata, opts);
+      }
+      session.undo = null;
       await stageFresh(transcript);
+    }
   }
 
+  if (session.stage !== 'picking') session.stuck = 0;
   recompute(session);
+
+  // AUTO-COMMIT. When every line is unambiguous there is nothing to ask about,
+  // so asking is pure latency — it doubles the turns for the common case. Only a
+  // genuine conflict (which customer? how much?) still stops and asks.
+  // The write stays recoverable: `undo` holds it for one turn.
+  // No stageIn guard: a corrected line is just as unambiguous as a fresh one, and
+  // leaving it at "सही है?" reintroduces the approval turn for exactly the case
+  // the merchant has already had to speak twice.
+  if (session.stage === 'confirming' && !committed.length) {
+    const ready = session.drafts.filter((d) => d.status === 'ready');
+    if (ready.length && ready.length === session.drafts.length) {
+      committed = commitDrafts(khata, session.drafts);
+      session.undo = { drafts: session.drafts.map((d) => ({ ...d })) };
+      session.drafts = [];
+      recompute(session);
+      // The templated path reads `committed` directly, but the phrasing model
+      // only sees `facts` — without this it was handed "nothing is pending" and
+      // replied "what would you like to record?" to an entry it had just saved.
+      notes.push(
+        `SAVED to the book: ${committed
+          .map((c) => `${c.name_en} now owes ${c.after} rupees (was ${c.before})`)
+          .join('; ')}. Tell the merchant this is done, briefly.`,
+      );
+    }
+  }
+
   const tRoute = Date.now();
 
   // The screen can be right long before the voice is. Emitting here means the
@@ -857,11 +1038,11 @@ export async function runTurn(
   // already computed.
   const templated = templateReply(
     { drafts: session.drafts, committed, ...ctxExtra },
-    replyLangFor(opts.lang ?? (/[ऀ-ॿ]/.test(transcript) ? 'hi' : 'en')),
+    replyLangFor(opts.appLang ?? 'hi', transcript, opts.lang),
   );
   const reply = templated
     ? speechSafe(templated)
-    : await composeReply(facts, transcript, session.drafts.length <= 1 && !notes.length);
+    : await composeReply(facts, transcript, session.drafts.length <= 1 && !notes.length, opts.lang);
   log('reply_source', { templated: !!templated, chars: reply.length });
 
   // Plain-text history: replaying raw tool_calls would need matching tool-result

@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { FlatList, Pressable, StyleSheet, TextInput as RNTextInput } from 'react-native';
 
-import { Pressable, ScrollView, Text, TextInput, View } from '@/tw';
+import { AppFonts, Porcelain } from '@/constants/theme';
+import { Text, View } from '@/tw';
 import type { DeviceContact } from '@/store/device-contacts-store';
 
 interface ContactsSearchListProps {
@@ -9,34 +11,122 @@ interface ContactsSearchListProps {
   onSelect: (contact: DeviceContact) => void;
 }
 
+const PAGE = 40;
+
+/**
+ * Virtualized + debounced search. Mapping thousands of contacts into a
+ * ScrollView (old path) froze the JS thread so taps never registered.
+ */
 export function ContactsSearchList({ contacts, placeholder, onSelect }: ContactsSearchListProps) {
   const [query, setQuery] = useState('');
+  const [debounced, setDebounced] = useState('');
+
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(query.trim().toLowerCase()), 120);
+    return () => clearTimeout(id);
+  }, [query]);
+
+  // Pre-lower names once per contacts identity — avoids lowercasing every keystroke.
+  const indexed = useMemo(
+    () => contacts.map((c) => ({ c, key: c.name.toLowerCase() })),
+    [contacts],
+  );
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return contacts.slice(0, 20);
-    return contacts.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 20);
-  }, [contacts, query]);
+    if (!debounced) return indexed.slice(0, PAGE).map((x) => x.c);
+    const hits: DeviceContact[] = [];
+    for (const row of indexed) {
+      if (row.key.includes(debounced)) {
+        hits.push(row.c);
+        if (hits.length >= PAGE) break;
+      }
+    }
+    return hits;
+  }, [indexed, debounced]);
 
   return (
-    <View className="gap-2">
-      <TextInput
+    <View style={styles.wrap}>
+      <RNTextInput
         value={query}
         onChangeText={setQuery}
         placeholder={placeholder}
-        className="rounded-xl border border-line bg-app-bg px-3 py-2.5 text-base text-ink"
+        placeholderTextColor={Porcelain.muted}
+        autoCorrect={false}
+        autoCapitalize="none"
+        style={styles.input}
       />
-      <ScrollView className="max-h-48" keyboardShouldPersistTaps="handled">
-        {filtered.map((c) => (
+      <FlatList
+        data={filtered}
+        keyExtractor={(c) => c.id}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        style={styles.list}
+        initialNumToRender={12}
+        maxToRenderPerBatch={16}
+        windowSize={5}
+        removeClippedSubviews
+        ListEmptyComponent={
+          <Text style={styles.empty}>—</Text>
+        }
+        renderItem={({ item }) => (
           <Pressable
-            key={c.id}
-            onPress={() => onSelect(c)}
-            className="flex-row items-center justify-between border-b border-line px-1 py-2.5">
-            <Text className="text-sm text-ink">{c.name}</Text>
-            <Text className="text-xs text-muted">{c.phone ?? ''}</Text>
+            onPress={() => onSelect(item)}
+            style={({ pressed }) => [styles.row, pressed && { backgroundColor: Porcelain.saffronMist }]}>
+            <Text style={styles.name} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <Text style={styles.phone} numberOfLines={1}>
+              {item.phone ?? ''}
+            </Text>
           </Pressable>
-        ))}
-      </ScrollView>
+        )}
+      />
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  wrap: { gap: 8 },
+  input: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Porcelain.line,
+    backgroundColor: Porcelain.paper,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    fontFamily: AppFonts.body,
+    color: Porcelain.ink,
+  },
+  list: {
+    maxHeight: 220,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingHorizontal: 4,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: Porcelain.line,
+  },
+  name: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: AppFonts.body,
+    color: Porcelain.ink,
+  },
+  phone: {
+    fontSize: 12,
+    fontFamily: AppFonts.body,
+    color: Porcelain.muted,
+    maxWidth: '40%',
+  },
+  empty: {
+    paddingVertical: 16,
+    textAlign: 'center',
+    color: Porcelain.muted,
+    fontFamily: AppFonts.body,
+  },
+});

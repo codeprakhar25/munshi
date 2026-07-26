@@ -19,12 +19,53 @@ import type { Draft, Turn } from './types';
 /** Which template set to use. Anything else falls through to the model. */
 export type ReplyLang = 'hi' | 'en';
 
-export const replyLangFor = (code: string | null | undefined): ReplyLang | null => {
-  if (!code) return null;
-  if (code.startsWith('hi')) return 'hi';
-  if (code.startsWith('en')) return 'en';
-  return null; // Marathi, Tamil, Bengali… -> let the model phrase it
-};
+/**
+ * Hindi function words that survive romanisation. Hinglish — "Gopal ne paanch
+ * sau diye" — is Latin script, so a script test alone calls it English and the
+ * merchant who picked Hindi gets answered in English.
+ */
+const HINGLISH = /\b(ne|ko|ka|ki|ke|se|diye|diya|liya|le|hai|hain|nahi|nahin|haan|kitna|kitne|baaki|udhaar|udhar|rupaye|rupaiya|sau|hazaar|paise|wala|wale)\b/i;
+
+/**
+ * Which language to answer in: **the one they just spoke**.
+ *
+ * The bug this exists to fix is Hinglish. "Gopal ne paanch sau diye" is Latin
+ * script, so a script test alone calls it English and answers a Hindi speaker in
+ * English — and Saaras itself reports en-IN for plenty of Hinglish, so its
+ * detection cannot be trusted alone either. Romanised Hindi function words are
+ * the reliable signal.
+ *
+ * The configured app language is only a last resort, for when the utterance
+ * carries no signal at all (a bare "haan", a number on its own).
+ */
+export function replyLangFor(
+  appLang: string | null | undefined,
+  transcript?: string,
+  detected?: string | null,
+): ReplyLang | null {
+  if (transcript) {
+    // Any Indic script that ISN'T Devanagari — Odia, Tamil, Bengali, Telugu,
+    // Kannada, Malayalam, Gujarati, Gurmukhi — means they spoke a language we
+    // have no templates for. Return null so the MODEL phrases it in their
+    // language. Falling through to the app-language default here is what
+    // answered an Odia speaker in Hindi.
+    if (/[\u0980-\u0DFF\u0A80-\u0AFF\u0A00-\u0A7F]/.test(transcript)) return null;
+    if (/[ऀ-ॿ]/.test(transcript)) return 'hi';        // spoken Hindi, Devanagari
+    if (HINGLISH.test(transcript)) return 'hi';        // spoken Hindi, romanised
+    if (/[a-z]/i.test(transcript)) return 'en';        // genuinely English
+  }
+
+  // Same reasoning for the detected code: od-IN / ta-IN / bn-IN are not ours.
+  if (detected && !/^(hi|en)/.test(detected)) return null;
+
+  if (detected?.startsWith('hi')) return 'hi';
+  if (detected?.startsWith('en')) return 'en';
+
+  // Nothing to go on — fall back to what they configured.
+  if (appLang?.startsWith('hi')) return 'hi';
+  if (appLang?.startsWith('en')) return 'en';
+  return null; // Marathi, Tamil… -> let the model phrase it
+}
 
 const rupees = (n: number, l: ReplyLang) =>
   n < 0
@@ -50,12 +91,22 @@ function pending(d: Draft, l: ReplyLang): string | null {
   }
   if (d.status === 'ambiguous') {
     const names = d.options.map((o) => (l === 'en' ? o.name_en : o.name)).join(l === 'hi' ? ' या ' : ' or ');
-    return l === 'hi' ? `कौन सा — ${names}?` : `Which one — ${names}?`;
+    // Offer "new" explicitly: the same question fires when the model picks a
+    // near-match for somebody who is not in the book at all.
+    return l === 'hi' ? `कौन सा — ${names}? या नया?` : `Which one — ${names}? Or a new person?`;
   }
   if (d.status === 'needs_amount') {
     return l === 'hi' ? `${who(d, l)} के कितने रुपये?` : `How many rupees for ${who(d, l)}?`;
   }
   if (d.status === 'needs_customer') {
+    // A name we do not recognise is almost always a NEW customer, not a
+    // mishearing. Asking "whose name?" over and over is a dead end — offer the
+    // thing they actually want and let one "हाँ" do it.
+    if (d.name_spoken) {
+      return l === 'hi'
+        ? `${d.name_spoken} बही में नहीं है। नया खाता खोलूँ?`
+        : `${d.name_spoken} isn't in the book. Open a new khata?`;
+    }
     return l === 'hi' ? 'किसका नाम बोलिए?' : 'Which customer?';
   }
   return null;

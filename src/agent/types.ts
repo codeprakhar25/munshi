@@ -156,6 +156,14 @@ export interface Session {
   drafts: Draft[];
   /** Which draft the current question is about. */
   focus: string | null;
+  /** Consecutive unanswered questions, so a stage cannot ask forever. */
+  stuck?: number;
+  /**
+   * What was just written, kept for exactly one turn so "नहीं, 150 थे" can still
+   * reverse and rewrite it. Without an approval step this is the ONLY way a
+   * mistake is recoverable by voice.
+   */
+  undo?: { drafts: Draft[] } | null;
 }
 
 export const newSession = (): Session => ({ stage: 'idle', history: [], drafts: [], focus: null });
