@@ -118,6 +118,8 @@ export interface Session {
   drafts: Draft[];
   /** Which draft the current question is about. */
   focus: string | null;
+  /** Consecutive unanswered questions, so a stage cannot ask forever. */
+  stuck?: number;
 }
 
 export const newSession = (): Session => ({ stage: 'idle', history: [], drafts: [], focus: null });

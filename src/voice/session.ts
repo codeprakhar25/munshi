@@ -131,6 +131,10 @@ export class VoiceSession {
   }
 
   async stopConversation(): Promise<void> {
+    // Dead stop, mid-sentence: close the reply stream (or Bulbul keeps feeding
+    // a dead player) AND kill playback, same as a barge-in.
+    this.tts?.close();
+    this.tts = null;
     this.audio.stopPlayback();
     await this.stop();
   }

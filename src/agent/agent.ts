@@ -796,7 +796,19 @@ export async function runTurn(
         focus.status = focus.amount === null ? 'needs_amount' : 'ready';
         if (focus.status === 'ready') price(focus, 0); else focus.before = 0;
       } else {
-        notes.push('They did not answer which person. Ask again, briefly, naming the options.');
+        // No escape from this stage was the actual loop: an unanswered "which
+        // one?" just asked again, forever, and the merchant could not get out by
+        // saying anything else. Two strikes, then treat the utterance as a fresh
+        // command — abandoning a draft costs nothing, since nothing was written.
+        session.stuck = (session.stuck ?? 0) + 1;
+        if (session.stuck >= 2) {
+          log('pick_gave_up', { transcript, after: session.stuck });
+          session.drafts = [];
+          session.stuck = 0;
+          await stageFresh(transcript);
+        } else {
+          notes.push('They did not answer which person. Ask again, briefly, naming the options.');
+        }
       }
       break;
     }
@@ -835,6 +847,7 @@ export async function runTurn(
       await stageFresh(transcript);
   }
 
+  if (session.stage !== 'picking') session.stuck = 0;
   recompute(session);
   const tRoute = Date.now();
 

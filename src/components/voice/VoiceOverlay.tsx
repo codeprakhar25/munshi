@@ -44,6 +44,8 @@ const STAGE = 300;
 const ORB = 132;
 const FAB = 74;
 
+const AnimatedDismiss = Animated.createAnimatedComponent(RNPressable);
+
 const MOOD = {
   listening: { ring: 'rgba(21,128,61,0.35)', glow: 'rgba(34,197,94,0.22)', dust: 'rgba(34,197,94,0.4)', period: 2800, stagger: 350 },
   speaking: { ring: 'rgba(245,158,11,0.45)', glow: 'rgba(245,158,11,0.22)', dust: 'rgba(245,158,11,0.45)', period: 2400, stagger: 280 },
@@ -158,20 +160,33 @@ function useBob(active: boolean) {
   return useAnimatedStyle(() => ({ transform: [{ translateY: -3 * p.value }] }));
 }
 
-function DraftChip({ d, index }: { d: Draft; index: number }) {
-  if (d.status !== 'ready' && d.status !== 'needs_amount' && d.status !== 'ambiguous') return null;
+/** Same card the home listing uses: avatar initial, name + detail, serif amount. */
+function DraftCard({ d, index }: { d: Draft; index: number }) {
   const name = d.person?.name || d.name_spoken || '—';
-  const amt = d.amount != null ? `₹${d.amount}` : '…';
   const pay = d.kind === 'payment';
+  const sub =
+    d.status === 'ambiguous'
+      ? d.options.map((o) => o.name).join(' / ')
+      : d.status === 'needs_amount'
+        ? '…'
+        : d.label || d.kind;
+  const amt = d.amount != null ? `₹${d.amount}` : '…';
   return (
-    <Animated.View entering={fadeUp(index, 0)} style={styles.chip}>
-      <Text className="text-sm font-bold text-ink" numberOfLines={1} style={{ fontFamily: AppFonts.displaySemiBold, maxWidth: 110 }}>
-        {name}
-      </Text>
-      <Text className="text-xs text-muted" numberOfLines={1} style={{ maxWidth: 80 }}>
-        {d.label || d.kind}
-      </Text>
-      <Text style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 16, marginLeft: 'auto', color: pay ? Porcelain.leaf : Porcelain.rose }}>
+    <Animated.View entering={fadeUp(index, 0)} style={styles.card}>
+      <RNView style={styles.cardAva}>
+        <Text style={{ fontFamily: AppFonts.serifSemiBold, color: Porcelain.saffronDeep, fontSize: 19 }}>
+          {name.charAt(0)}
+        </Text>
+      </RNView>
+      <RNView style={{ flex: 1, minWidth: 0 }}>
+        <Text className="text-base font-bold text-ink" numberOfLines={1} style={{ fontFamily: AppFonts.displaySemiBold }}>
+          {name}
+        </Text>
+        <Text className="text-xs text-muted" numberOfLines={1}>
+          {sub}
+        </Text>
+      </RNView>
+      <Text style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 19, color: pay ? Porcelain.leaf : Porcelain.rose }}>
         {pay ? '−' : '+'}{amt}
       </Text>
     </Animated.View>
@@ -186,6 +201,20 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
   const spec = active ? MOOD[active] : null;
 
   const bob = useBob(mood === 'speaking');
+
+  const cards = view.drafts
+    .filter((d) => d.status === 'ready' || d.status === 'needs_amount' || d.status === 'ambiguous')
+    .slice(-4);
+
+  // When entries appear, Munshi glides up to make room and the cards fill the
+  // space beneath him.
+  const lift = useSharedValue(0);
+  useEffect(() => {
+    lift.set(withSpring(cards.length ? 1 : 0, { damping: 18, stiffness: 120 }));
+  }, [cards.length, lift]);
+  const liftStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: -110 * lift.value }],
+  }));
 
   // Fly-in: the orb starts life exactly where the FAB sits (small, low) and
   // springs up to the stage center; rings/glow/dust bloom in behind it.
@@ -259,7 +288,7 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
 
         {/* box-none: taps between the rings (outside the orb) fall through to the
             frost layer and close the agent. */}
-        <RNView pointerEvents="box-none" style={styles.stage}>
+        <Animated.View pointerEvents="box-none" style={[styles.stage, liftStyle]}>
           <Animated.View style={[StyleSheet.absoluteFill, bloomStyle]} pointerEvents="none">
             {/* keyed by mood so ring loops restart in phase on every mood change */}
             {spec ? (
@@ -294,12 +323,13 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
               </PressScale>
             </Animated.View>
           </Animated.View>
-        </RNView>
+        </Animated.View>
 
-        {/* Session cards — one appears for each entry as you speak. */}
+        {/* Session cards — one appears for each entry as you speak, filling the
+            space Munshi vacates. */}
         <RNView style={styles.session} pointerEvents="none">
-          {view.drafts.slice(-4).map((d, i) => (
-            <DraftChip key={d.id} d={d} index={i} />
+          {cards.map((d, i) => (
+            <DraftCard key={d.id} d={d} index={i} />
           ))}
         </RNView>
       </RNView>
@@ -307,12 +337,10 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
   );
 }
 
-const AnimatedDismiss = Animated.createAnimatedComponent(RNPressable);
-
 const styles = StyleSheet.create({
   frost: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(251,249,246,0.94)',
+    backgroundColor: 'rgba(251,249,246,0.98)',
   },
   center: {
     flex: 1,
@@ -375,25 +403,33 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 18,
     right: 18,
-    bottom: 48,
+    top: '50%',
+    marginTop: -24,
+    bottom: 24,
     gap: 8,
-    alignItems: 'center',
   },
-  chip: {
+  card: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.9)',
+    gap: 12,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: 'rgba(28,25,23,0.06)',
-    maxWidth: '100%',
+    borderColor: Porcelain.line,
+    backgroundColor: Porcelain.white,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
     shadowColor: '#1c1917',
     shadowOpacity: 0.08,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 8 },
     elevation: 4,
+  },
+  cardAva: {
+    height: 44,
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    backgroundColor: Porcelain.paper2,
   },
 });

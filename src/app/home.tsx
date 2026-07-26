@@ -57,20 +57,20 @@ export default function HomeScreen() {
 
   const openVoice = useCallback(async () => {
     setVoiceOpen(true);
-    const greet =
-      language === 'en'
-        ? 'Namaste. Say a name and amount — like Rajesh doodh 50.'
-        : 'नमस्ते। नाम और रकम बोलो — जैसे राजेश दूध पचास।';
-    await voice.current?.startConversation(greet);
-  }, [language]);
+    // Just "ji boliye". A long scripted opener is dead air on every single
+    // activation, and reciting an example in English sets the merchant up to
+    // reply in English when the whole point is that they speak however they like.
+    await voice.current?.startConversation('जी बोलिए');
+  }, []);
 
   const closeVoice = useCallback(async () => {
+    // Dismiss the UI first — audio teardown must never hold the overlay open.
+    setVoiceOpen(false);
+    setView({ state: 'idle', heard: '', reply: '', stage: 'idle', drafts: [], error: null });
     await voice.current?.stopConversation();
     // Reset the conversation so the next tap starts a fresh session — pending
     // (unconfirmed) drafts die with the overlay, exactly like the mock.
     voice.current?.resetConversation();
-    setVoiceOpen(false);
-    setView({ state: 'idle', heard: '', reply: '', stage: 'idle', drafts: [], error: null });
   }, []);
 
   const due = khata ? totalDue(khata) : 0;
@@ -85,10 +85,17 @@ export default function HomeScreen() {
     );
   }
 
+  // Most recently touched first: after speaking an entry the merchant looks at
+  // the top of the list to check it, and a balance-ordered list buries it.
+  const lastTouched = (c: (typeof khata.customers)[number]) =>
+    c.entries.length ? c.entries[c.entries.length - 1].ts : '';
   const owing = khata.customers
-    .filter((c) => c.balance > 0)
+    .filter((c) => c.balance !== 0)
     .slice()
-    .sort((a, b) => b.balance - a.balance);
+    .sort((a, b) => {
+      const t = lastTouched(b).localeCompare(lastTouched(a));
+      return t !== 0 ? t : b.balance - a.balance;
+    });
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }} edges={['top']}>
@@ -210,12 +217,6 @@ export default function HomeScreen() {
       {/* FAB leaves the bottom while the overlay is up — the flying orb IS the face. */}
       {!voiceOpen && (
         <>
-          <Text
-            className="absolute bottom-28 self-center text-xs font-bold uppercase tracking-widest text-muted"
-            style={{ fontFamily: AppFonts.displayBold }}>
-            {t.talkMunshi}
-          </Text>
-
           {/* Munshi FAB — breathing saffron halo behind, warm gradient wash over the face. */}
           <RNView pointerEvents="box-none" style={styles.fabWrap}>
             <Animated.View pointerEvents="none" style={[styles.fabHalo, fabHalo]}>
