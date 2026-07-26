@@ -1,21 +1,21 @@
 import { Modal } from 'react-native';
 
+import type { DraftPerson } from '@/agent/types';
 import { ContactsSearchList } from '@/components/scan/contacts-search-list';
 import { Pressable, ScrollView, Text, View } from '@/tw';
 import type { DeviceContact } from '@/store/device-contacts-store';
-import type { Person } from '@/store/people-store';
 
 interface PickPersonSheetProps {
   visible: boolean;
   mode: 'pick' | 'contacts';
   title: string;
-  matches: Person[];
+  matches: DraftPerson[];
   contacts: DeviceContact[];
   nameToken: string | null;
   searchPlaceholder: string;
   fromContactsLabel: string;
   walkInLabel: string;
-  onPickExisting: (person: Person) => void;
+  onPickExisting: (person: DraftPerson) => void;
   onPickContact: (contact: DeviceContact) => void;
   onWalkIn: (name: string) => void;
   onClose: () => void;
@@ -53,10 +53,21 @@ export function PickPersonSheet({
                   key={p.id}
                   onPress={() => onPickExisting(p)}
                   className="mb-2 flex-row items-center justify-between rounded-xl border border-line bg-app-bg px-3 py-3">
-                  <Text className="text-sm text-ink">{p.name}</Text>
+                  <View className="min-w-0 flex-1 pr-2">
+                    <Text className="text-sm text-ink">{p.name}</Text>
+                    <Text className="text-xs text-muted">
+                      {p.name_en !== p.name ? p.name_en : ''}
+                      {p.balance > 0 ? ` · ₹${p.balance}` : ''}
+                    </Text>
+                  </View>
                   <Text className="text-xs text-muted">{p.phone ?? walkInLabel}</Text>
                 </Pressable>
               ))}
+              {fromContactsLabel ? (
+                <Text className="mb-1 mt-1 text-[10px] uppercase tracking-wide text-muted">
+                  {fromContactsLabel}
+                </Text>
+              ) : null}
             </ScrollView>
           ) : (
             <View className="gap-3">

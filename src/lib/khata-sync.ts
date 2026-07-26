@@ -1,11 +1,11 @@
 /**
- * Bridge people-store ↔ khata customers, and OCR drafts → ledger writes.
+ * Bridge people-store ↔ khata customers.
+ * Scan commits go through agent `commitDrafts` from the review screen.
  */
-import { deriveBalance, normalizeKhata } from '@/agent/agent';
-import type { Customer, Entry, Khata } from '@/agent/types';
+import { normalizeKhata } from '@/agent/agent';
+import type { Draft, DraftPerson, Khata } from '@/agent/types';
 import { saveKhata } from '@/db/khata';
 import type { Person } from '@/store/people-store';
-import type { ScanLineDraft } from '@/store/scan-store';
 
 function nextId(prefix: string, used: string[]): string {
   let n = 1;
@@ -47,62 +47,49 @@ export async function persistPeopleIntoKhata(khata: Khata, people: Person[]): Pr
   return saveKhata(mergePeopleIntoKhata(khata, people));
 }
 
-/** Write confirmed OCR lines into the passbook. */
-export async function commitScanDrafts(
-  khata: Khata,
-  drafts: ScanLineDraft[],
-  people: Person[]
-): Promise<{ khata: Khata; count: number }> {
-  let next = mergePeopleIntoKhata(khata, people);
-  const ts = new Date().toISOString();
-  let count = 0;
+/**
+ * Ensure every draft person exists as a khata customer before `commitDrafts`.
+ * Contact-sourced cards often arrive with `customer_id: null` + `from_contacts`.
+ * Mutates `khata` and returns patched drafts with `customer_id` filled.
+ */
+export function ensureCustomersForDrafts(khata: Khata, drafts: Draft[]): Draft[] {
+  const used = khata.customers.map((c) => c.id);
 
-  for (const d of drafts) {
-    if (!d.confirmed || d.amount == null || d.amount <= 0) continue;
-
-    let cust: Customer | undefined;
-    if (d.matchedPersonId) {
-      cust = next.customers.find((c) => c.id === d.matchedPersonId);
-      const person = people.find((p) => p.id === d.matchedPersonId);
-      if (!cust && person) {
-        next = mergePeopleIntoKhata(next, [person]);
-        cust = next.customers.find(
-          (c) => c.id === person.id || c.name_en.toLowerCase() === person.name.toLowerCase()
-        );
-      }
+  const upsert = (person: DraftPerson, preferredId: string | null): string => {
+    const phone = person.phone ?? null;
+    const existing = khata.customers.find(
+      (c) =>
+        (preferredId && c.id === preferredId) ||
+        (phone && c.phone === phone) ||
+        c.name_en.toLowerCase() === (person.name_en || person.name).toLowerCase() ||
+        c.name === person.name,
+    );
+    if (existing) {
+      if (phone) existing.phone = phone;
+      const aliases = new Set([...(existing.aliases || []), person.name.split(' ')[0], person.name_en]);
+      existing.aliases = [...aliases].filter(Boolean) as string[];
+      return existing.id;
     }
-    if (!cust) {
-      const name = d.nameToken || d.particulars || 'Walk-in';
-      cust = {
-        id: nextId('c', next.customers.map((c) => c.id)),
-        name,
-        name_en: name,
-        aliases: [name],
-        phone: null,
-        balance: 0,
-        entries: [],
-      };
-      next.customers.push(cust);
-    }
+    const id =
+      preferredId && !used.includes(preferredId)
+        ? preferredId
+        : nextId('c', used);
+    used.push(id);
+    khata.customers.push({
+      id,
+      name: person.name,
+      name_en: person.name_en || person.name,
+      aliases: [person.name.split(' ')[0], person.name_en].filter(Boolean) as string[],
+      phone,
+      balance: 0,
+      entries: [],
+    });
+    return id;
+  };
 
-    const before = cust.balance;
-    const action = d.type === 'payment' ? 'payment' : 'new_udhaar';
-    const after = d.type === 'payment' ? before - d.amount : before + d.amount;
-    const entry: Entry = {
-      ts,
-      action,
-      amount: d.amount,
-      before,
-      after,
-      label: d.particulars || d.rawText || undefined,
-    };
-    cust.entries.push(entry);
-    cust.balance = deriveBalance(cust.entries);
-    next.audit.push({ ...entry, customer_id: cust.id });
-    count += 1;
-  }
-
-  next = normalizeKhata(next);
-  await saveKhata(next);
-  return { khata: next, count };
+  return drafts.map((d) => {
+    if (!d.person) return d;
+    const customer_id = upsert(d.person, d.customer_id);
+    return { ...d, customer_id };
+  });
 }

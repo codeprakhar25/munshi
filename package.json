@@ -64,6 +64,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "turns": "tsx --env-file=.env scripts/turns.ts",
+    "ocr": "tsx --env-file=.env scripts/ocr.ts",
+    "ocr:capture": "tsx --env-file=.env scripts/ocr-capture.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p scripts/tsconfig.json"
   },
   "private": true

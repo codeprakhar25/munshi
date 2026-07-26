@@ -72,6 +72,17 @@ export type DraftStatus =
   /** We could not make sense of it at all. */
   | 'unclear';
 
+/** Direction of one itemized amount on a scan person-card (OCR may get this wrong). */
+export type ItemDirection = 'udhaar' | 'payment';
+
+export interface DraftLineItem {
+  id: string;
+  amount: number;
+  direction: ItemDirection;
+  /** What was bought / how it was paid. */
+  label: string;
+}
+
 export interface DraftPerson {
   id: string;
   name: string;
@@ -99,6 +110,33 @@ export interface Draft {
   status: DraftStatus;
   /** Candidates when `status === 'ambiguous'`, or contact suggestions when `needs_customer`. */
   options: DraftPerson[];
+  /**
+   * Scan person-card: several amounts on one name (तेल 300, बिस्कुट 200, जमा 50).
+   * Voice drafts leave this undefined / empty.
+   */
+  items?: DraftLineItem[];
+  /** Scan UI: merchant tapped confirm on this person card. */
+  confirmed?: boolean;
+  /** Scan dedupe: already landed in khata from a prior scan — show, do not pre-confirm. */
+  already_imported?: boolean;
+  /** Present only on drafts read off a scanned page. Provenance + diagnostics. */
+  scan?: ScanProvenance;
+}
+
+/** Where a scanned card came from, and what decided how we read it. */
+export interface ScanProvenance {
+  /** The source line(s), verbatim, so the review card can show our reading. */
+  rawText: string;
+  /** As written on the page. Free text — deliberately never parsed into a Date. */
+  date: string | null;
+  /** Which signal decided credit-vs-payment. */
+  directionReason: 'keyword' | 'sign' | 'column' | 'model' | 'default';
+  /** Identifies the exact row, so a re-scan of the same page can be spotted. */
+  ref: { blockId: string; row: number; item: number };
+  /** How the person was matched, when one was. */
+  matchVia?: string;
+  /** 0..1 confidence of that match. Ordering and thresholds only, never a gate. */
+  matchScore?: number;
 }
 
 // ------------------------------------------------------------- the stage ----

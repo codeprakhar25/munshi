@@ -40,6 +40,11 @@ interface Strings {
   scanFrame: string;
   processingUploading: string;
   processingProcessing: string;
+  processingDownloading: string;
+  processingReading: string;
+  processingStructuring: string;
+  processingMatching: string;
+  /** @deprecated alias of processingMatching — kept for older call sites */
   processingParsing: string;
   reviewTitle: string;
   reviewEmpty: string;
@@ -54,6 +59,10 @@ interface Strings {
   credit: string;
   afterBal: string;
   toastScanSaved: (n: number) => string;
+  udhaarShort: string;
+  jamaShort: string;
+  netLabel: string;
+  alreadyImported: string;
 }
 
 const en: Strings = {
@@ -96,12 +105,16 @@ const en: Strings = {
   scanFrame: 'Align the page',
   processingUploading: 'Uploading…',
   processingProcessing: 'Reading your bahi…',
-  processingParsing: 'Organizing entries…',
+  processingDownloading: 'Fetching the page…',
+  processingReading: 'Finding amounts…',
+  processingStructuring: 'Understanding lines…',
+  processingMatching: 'Matching people…',
+  processingParsing: 'Matching people…',
   reviewTitle: 'Confirm',
   reviewEmpty: 'No entries found — try a clearer photo.',
   confirmLine: 'Confirm',
   discardLine: 'Skip',
-  saveConfirmed: (n) => `Save ${n} ${n === 1 ? 'entry' : 'entries'}`,
+  saveConfirmed: (n) => `Save ${n} ${n === 1 ? 'person' : 'people'}`,
   selectPerson: 'Select person',
   whoIsThis: 'Whose khata?',
   fromContacts: 'From contacts',
@@ -110,6 +123,10 @@ const en: Strings = {
   credit: 'Credit',
   afterBal: 'Balance after',
   toastScanSaved: (n) => `${n} entries added`,
+  udhaarShort: 'उधार',
+  jamaShort: 'जमा',
+  netLabel: 'Net',
+  alreadyImported: 'Already imported',
 };
 
 const hi: Strings = {
@@ -152,12 +169,16 @@ const hi: Strings = {
   scanFrame: 'पेज संरेखित करें',
   processingUploading: 'भेजा जा रहा है…',
   processingProcessing: 'बही पढ़ रहे हैं…',
-  processingParsing: 'एंट्री तैयार…',
+  processingDownloading: 'पेज ला रहे हैं…',
+  processingReading: 'रकम ढूँढ रहे हैं…',
+  processingStructuring: 'लाइन समझ रहे हैं…',
+  processingMatching: 'लोग मिला रहे हैं…',
+  processingParsing: 'लोग मिला रहे हैं…',
   reviewTitle: 'कन्फर्म',
   reviewEmpty: 'एंट्री नहीं मिली — साफ़ फोटो आज़माएँ।',
   confirmLine: 'जोड़ो',
   discardLine: 'छोड़ो',
-  saveConfirmed: (n) => `${n} एंट्री सेव`,
+  saveConfirmed: (n) => `${n} ख़ाता सेव`,
   selectPerson: 'व्यक्ति चुनें',
   whoIsThis: 'किसका ख़ाता?',
   fromContacts: 'कॉन्टैक्ट से',
@@ -166,6 +187,10 @@ const hi: Strings = {
   credit: 'उधार',
   afterBal: 'बाद बाकी',
   toastScanSaved: (n) => `${n} एंट्री जुड़े`,
+  udhaarShort: 'उधार',
+  jamaShort: 'जमा',
+  netLabel: 'कुल',
+  alreadyImported: 'पहले से जुड़ा',
 };
 
 const mr: Strings = {

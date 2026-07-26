@@ -1,29 +1,44 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect } from 'react';
 import { Image, StyleSheet, View as RNView } from 'react-native';
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { InkButton } from '@/components/ui/buttons';
 import { Gradient, Rise, useBreath } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
+import { loadKhata } from '@/db/khata';
 import { useStrings } from '@/lib/i18n';
-import type { DocLanguage } from '@/lib/sarvam/document-intelligence';
-import { runDocumentIntelligence } from '@/lib/sarvam/document-intelligence';
-import { parseBlocksToDrafts } from '@/lib/sarvam/scan-parsing';
-import { Pressable, Text, View } from '@/tw';
+import {
+  fingerprintsFromKhata,
+  markAlreadyImported,
+} from '@/lib/sarvam/scan-parsing';
+import { runScan, type ScanPhase } from '@/ocr';
+import type { DocLanguage } from '@/ocr/client';
+import type { TransliterateSource } from '@/ocr/transliterate';
+import { Text, View } from '@/tw';
+import { useDeviceContactsStore } from '@/store/device-contacts-store';
 import { type AppLanguage, useOnboardingStore } from '@/store/onboarding-store';
-import { type ScanEntry, useScanStore } from '@/store/scan-store';
+import { type ScanEntry, type ScanJobPhase, useScanStore } from '@/store/scan-store';
 
 /**
- * Indeterminate progress in the mock's style: a saffron gradient segment
- * sweeping along the 3px track. Real OCR progress isn't knowable, so the sweep
- * is honest — motion without a fake percentage.
+ * Indeterminate progress: saffron segment sweeping the track.
+ * Real OCR % isn't knowable — motion without a fake number.
  */
 function ProgressSweep() {
   const p = useSharedValue(0);
   useEffect(() => {
-    p.value = withRepeat(withTiming(1, { duration: 1400, easing: Easing.inOut(Easing.cubic) }), -1, false);
+    p.value = withRepeat(
+      withTiming(1, { duration: 1400, easing: Easing.inOut(Easing.cubic) }),
+      -1,
+      false,
+    );
   }, [p]);
   const style = useAnimatedStyle(() => ({
     left: `${-40 + 140 * p.value}%`,
@@ -31,7 +46,10 @@ function ProgressSweep() {
   return (
     <RNView style={progressStyles.track}>
       <Animated.View style={[progressStyles.fill, style]}>
-        <Gradient image="linear-gradient(90deg, rgba(245,158,11,0) 0%, #f59e0b 30%, #b45309 70%, rgba(180,83,9,0) 100%)" style={StyleSheet.absoluteFill} />
+        <Gradient
+          image="linear-gradient(90deg, rgba(245,158,11,0) 0%, #f59e0b 30%, #b45309 70%, rgba(180,83,9,0) 100%)"
+          style={StyleSheet.absoluteFill}
+        />
       </Animated.View>
     </RNView>
   );
@@ -62,6 +80,28 @@ const LANGUAGE_TO_DOC: Record<AppLanguage, DocLanguage> = {
   ta: 'ta-IN',
 };
 
+/** App language → transliteration source (register script). */
+const LANGUAGE_TO_SCRIPT: Record<AppLanguage, TransliterateSource> = {
+  hi: 'hi-IN',
+  en: 'en-IN',
+  mr: 'mr-IN',
+  ta: 'ta-IN',
+};
+
+function asJobPhase(phase: ScanPhase): ScanJobPhase {
+  switch (phase) {
+    case 'uploading':
+    case 'processing':
+    case 'downloading':
+    case 'reading':
+    case 'structuring':
+    case 'matching':
+      return phase;
+    default:
+      return 'processing';
+  }
+}
+
 export default function ScanProcessingScreen() {
   const { entry: entryParam } = useLocalSearchParams<{ entry?: string }>();
   const entry: ScanEntry = entryParam === 'onboarding' ? 'onboarding' : 'general';
@@ -73,6 +113,7 @@ export default function ScanProcessingScreen() {
   const jobPhase = useScanStore((s) => s.jobPhase);
   const errorMessage = useScanStore((s) => s.errorMessage);
   const setJobPhase = useScanStore((s) => s.setJobPhase);
+  const setJobId = useScanStore((s) => s.setJobId);
   const setDrafts = useScanStore((s) => s.setDrafts);
 
   useEffect(() => {
@@ -82,16 +123,34 @@ export default function ScanProcessingScreen() {
     async function run() {
       try {
         setJobPhase('uploading');
-        const blocks = await runDocumentIntelligence(
-          { uri: sourceUri!, type: sourceType! },
-          LANGUAGE_TO_DOC[language],
-          (phase) => {
-            if (!cancelled) setJobPhase(phase);
-          }
-        );
+        const res = await fetch(sourceUri!);
+        if (!res.ok) throw new Error(`could not read source (${res.status})`);
+        const bytes = new Uint8Array(await res.arrayBuffer());
         if (cancelled) return;
-        setJobPhase('parsing');
-        const drafts = parseBlocksToDrafts(blocks);
+
+        const khata = await loadKhata();
+        const contacts = useDeviceContactsStore.getState().contacts.map((c) => ({
+          id: c.id,
+          name: c.name,
+          phone: c.phone,
+        }));
+        if (cancelled) return;
+
+        const report = await runScan(bytes, sourceType!, LANGUAGE_TO_DOC[language], {
+          khata,
+          contacts,
+          scriptLanguage: LANGUAGE_TO_SCRIPT[language],
+          onPhase: (phase) => {
+            if (!cancelled) setJobPhase(asJobPhase(phase));
+          },
+        });
+        if (cancelled) return;
+
+        setJobId(report.jobId);
+        const drafts = markAlreadyImported(
+          report.drafts,
+          fingerprintsFromKhata(khata),
+        );
         setDrafts(drafts);
         setJobPhase('done');
         router.replace(`/scan/review?entry=${entry}`);
@@ -101,7 +160,7 @@ export default function ScanProcessingScreen() {
         }
       }
     }
-    run();
+    void run();
 
     return () => {
       cancelled = true;
@@ -109,17 +168,13 @@ export default function ScanProcessingScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceUri, sourceType]);
 
-  const caption =
-    jobPhase === 'uploading'
-      ? t.processingUploading
-      : jobPhase === 'processing'
-        ? t.processingProcessing
-        : t.processingParsing;
-
+  const caption = captionFor(jobPhase, t);
   const breath = useBreath({ peak: 1.03, lo: 0.85, hi: 1, ms: 2600 });
 
   return (
-    <SafeAreaView className="flex-1 items-center justify-center bg-app-bg px-6" style={{ backgroundColor: Porcelain.paper }}>
+    <SafeAreaView
+      className="flex-1 items-center justify-center bg-app-bg px-6"
+      style={{ backgroundColor: Porcelain.paper }}>
       {jobPhase === 'error' ? (
         <View className="items-center gap-3">
           <Text className="text-4xl">⚠️</Text>
@@ -138,7 +193,9 @@ export default function ScanProcessingScreen() {
             </Animated.View>
           </Rise>
           <Rise index={1}>
-            <Text className="text-center text-ink" style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 20 }}>
+            <Text
+              className="text-center text-ink"
+              style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 20 }}>
               {caption}
             </Text>
           </Rise>
@@ -149,6 +206,25 @@ export default function ScanProcessingScreen() {
       )}
     </SafeAreaView>
   );
+}
+
+function captionFor(phase: ScanJobPhase, t: ReturnType<typeof useStrings>): string {
+  switch (phase) {
+    case 'uploading':
+      return t.processingUploading;
+    case 'processing':
+      return t.processingProcessing;
+    case 'downloading':
+      return t.processingDownloading;
+    case 'reading':
+      return t.processingReading;
+    case 'structuring':
+      return t.processingStructuring;
+    case 'matching':
+      return t.processingMatching;
+    default:
+      return t.processingMatching;
+  }
 }
 
 const procStyles = StyleSheet.create({

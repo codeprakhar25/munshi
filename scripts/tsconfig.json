@@ -12,5 +12,5 @@
   // Only the layers the harness is allowed to reach. Widening this to ../src/**
   // drags in UI files (and their CSS side-effect imports), which is the signal
   // that the harness has grown a dependency it should not have.
-  "include": ["./**/*.ts", "../src/agent/**/*.ts", "../src/db/**/*.ts"]
+  "include": ["./**/*.ts", "../src/agent/**/*.ts", "../src/db/**/*.ts", "../src/ocr/**/*.ts"]
 }
