@@ -424,6 +424,39 @@ and we rebuild **once**:
 
 ---
 
+## 10b. Samvaad / Sarvam Agents — telephony, not an in-app channel
+
+Checked 2026-07-26, because "can we just use the thing in the Sarvam dashboard?" is
+the obvious question and the POC left it open.
+
+**Correcting POC README finding #6.** It concluded Samvaad was "a console, not an API"
+after probing `/v1/agents`, `/conversations`, `/samvaad`, `/realtime` under
+`api.sarvam.ai` and getting 404s. Wrong host. It *is* API-driven:
+
+- Base URL `https://apps.sarvam.ai/api/app-authoring/v1`, auth `X-API-Key` — a plain
+  API key works, no SSO required.
+- Endpoints for deployments, campaigns, cohorts, interactions, recordings, transcripts.
+
+**But it does not fit the voice widget.** The documented channel is **telephony** — "a
+deployment makes your agent reachable on a phone number for inbound calls", and
+connection configs specify a telephony provider and phone numbers. No WebSocket, web
+or mobile client channel is documented, so there is no way to stream this phone's
+microphone into a Samvaad agent short of literally placing a call. Two further
+mismatches even if a channel existed:
+
+- The khata lives in AsyncStorage **on the device** (§1). A cloud-hosted agent cannot
+  read or write it without us standing up the server §3 just removed.
+- The draft state machine (§4) is the product. Handing the turn loop to a platform
+  means re-implementing stage-scoped tool schemas inside someone else's flow builder.
+
+**Where it IS the right tool: the collections widget.** Outbound calls to customers in
+their own language, which the README already has on the roadmap, is exactly what
+Samvaad is built for and would be far less work than building it ourselves. Revisit
+when that beat is picked up — and check then whether agent tools can call an external
+webhook, which the docs reference but do not specify.
+
+---
+
 ## 11. Known risks
 
 | risk | mitigation | residual |
