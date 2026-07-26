@@ -74,4 +74,4 @@ ARCHITECTURE.md  decision record — every choice, what it beat, and why
 
 ## Team
 
-Built by Prakhar & Omm at Sarvam Epoch, one Saturday, on ₹100 of API credits and a phone.
+Built by Prakhar & Omm at the Sarvam Epoch Buildathon, Bengaluru.
