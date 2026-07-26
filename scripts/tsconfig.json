@@ -1,0 +1,16 @@
+{
+  // Node types live HERE, not in the app config, on purpose.
+  //
+  // The app tsconfig has no Node types, so an accidental `import 'node:fs'`
+  // inside src/agent/ is a compile error rather than a comment someone has to
+  // notice. That is what keeps `npm run turns` able to exercise the real money
+  // logic with no phone attached. See ARCHITECTURE.md §3.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  // Only the layers the harness is allowed to reach. Widening this to ../src/**
+  // drags in UI files (and their CSS side-effect imports), which is the signal
+  // that the harness has grown a dependency it should not have.
+  "include": ["./**/*.ts", "../src/agent/**/*.ts", "../src/db/**/*.ts"]
+}
