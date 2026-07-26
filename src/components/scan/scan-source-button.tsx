@@ -1,4 +1,8 @@
-import { Pressable, Text, View } from '@/tw';
+import { StyleSheet } from 'react-native';
+
+import { PressScale } from '@/components/ui/motion';
+import { AppFonts, Porcelain } from '@/constants/theme';
+import { Text, View } from '@/tw';
 
 interface ScanSourceButtonProps {
   icon: string;
@@ -8,15 +12,26 @@ interface ScanSourceButtonProps {
 
 export function ScanSourceButton({ icon, label, onPress }: ScanSourceButtonProps) {
   return (
-    <Pressable
-      onPress={onPress}
-      className="flex-row items-center gap-3 rounded-2xl border border-line bg-surface p-4">
+    <PressScale scaleTo={0.98} onPress={onPress} style={styles.row}>
       <View className="h-11 w-11 items-center justify-center rounded-xl bg-accent-soft">
         <Text className="text-xl">{icon}</Text>
       </View>
-      <Text className="text-base font-bold text-ink" style={{ fontFamily: 'Urbanist_600SemiBold' }}>
+      <Text className="text-base font-bold text-ink" style={{ fontFamily: AppFonts.displaySemiBold }}>
         {label}
       </Text>
-    </Pressable>
+    </PressScale>
   );
 }
+
+const styles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: Porcelain.line,
+    backgroundColor: Porcelain.white,
+    padding: 16,
+  },
+});

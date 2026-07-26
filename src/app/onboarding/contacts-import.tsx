@@ -3,9 +3,11 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SaffronButton } from '@/components/ui/buttons';
+import { AmbientBackdrop, Rise } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
 import { useStrings } from '@/lib/i18n';
-import { Pressable, Text, View } from '@/tw';
+import { Text, View } from '@/tw';
 import { useDeviceContactsStore } from '@/store/device-contacts-store';
 import { DEMO_PEOPLE, type Person, usePeopleStore } from '@/store/people-store';
 import { useOnboardingStore } from '@/store/onboarding-store';
@@ -56,34 +58,30 @@ export default function ContactsImportScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }}>
+      <AmbientBackdrop image="radial-gradient(circle at 50% 0%, #FEF3C7 0%, rgba(254,243,199,0) 60%)" />
       <View className="flex-1 items-center justify-center gap-4 px-6">
-        <Text className="text-center text-2xl font-bold text-ink" style={{ fontFamily: AppFonts.displayBold }}>
-          {t.contactsImportTitle}
-        </Text>
+        <Rise index={0}>
+          <Text className="text-center text-ink" style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 28, letterSpacing: -0.6 }}>
+            {t.contactsImportTitle}
+          </Text>
+        </Rise>
         {count === null ? (
           <ActivityIndicator size="large" color={Porcelain.saffronDeep} />
         ) : (
-          <Text className="text-center text-base text-muted" style={{ fontFamily: AppFonts.body }}>
-            {count > 0 ? t.contactsImportBody(count) : t.contactsImportEmpty}
-          </Text>
+          <Rise index={1}>
+            <Text className="text-center text-base text-muted" style={{ fontFamily: AppFonts.body }}>
+              {count > 0 ? t.contactsImportBody(count) : t.contactsImportEmpty}
+            </Text>
+          </Rise>
         )}
       </View>
 
       <View className="px-6 pb-6">
-        <Pressable
+        <SaffronButton
           disabled={count === null}
+          label={t.continueLabel}
           onPress={() => router.push('/onboarding/map')}
-          className="rounded-2xl py-4"
-          style={{ backgroundColor: count === null ? Porcelain.line : Porcelain.saffronDeep }}>
-          <Text
-            className="text-center text-base font-bold"
-            style={{
-              fontFamily: AppFonts.displayBold,
-              color: count === null ? Porcelain.muted : '#fff',
-            }}>
-            {t.continueLabel}
-          </Text>
-        </Pressable>
+        />
       </View>
     </SafeAreaView>
   );

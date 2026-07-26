@@ -5,6 +5,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { LineItemCard } from '@/components/scan/line-item-card';
 import { PickPersonSheet } from '@/components/scan/pick-person-sheet';
+import { SaffronButton } from '@/components/ui/buttons';
+import { Rise } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
 import { loadKhata } from '@/db/khata';
 import { commitScanDrafts } from '@/lib/khata-sync';
@@ -111,7 +113,7 @@ export default function ScanReviewScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }}>
       <View className="px-5 pb-2 pt-3">
-        <Text className="text-xl font-bold text-ink" style={{ fontFamily: AppFonts.displayBold }}>
+        <Text className="text-ink" style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 24, letterSpacing: -0.5 }}>
           {t.reviewTitle}
         </Text>
       </View>
@@ -120,46 +122,38 @@ export default function ScanReviewScreen() {
         {drafts.length === 0 && (
           <Text className="mt-8 text-center text-sm text-muted">{t.reviewEmpty}</Text>
         )}
-        {drafts.map((draft) => {
+        {drafts.map((draft, i) => {
           const matchedPerson = people.find((p) => p.id === draft.matchedPersonId) ?? null;
           return (
-            <LineItemCard
-              key={draft.id}
-              draft={draft}
-              matchedPerson={matchedPerson}
-              selectPersonLabel={t.selectPerson}
-              confirmLabel={t.confirmLine}
-              discardLabel={t.discardLine}
-              onChange={(patch) => updateDraft(draft.id, patch)}
-              onSelectPerson={() => setActiveDraftId(draft.id)}
-              onConfirm={() => updateDraft(draft.id, { confirmed: true, matchState: 'confirmed' })}
-              onDiscard={() => setDrafts(drafts.filter((d) => d.id !== draft.id))}
-            />
+            <Rise key={draft.id} index={Math.min(i, 5)}>
+              <LineItemCard
+                draft={draft}
+                matchedPerson={matchedPerson}
+                selectPersonLabel={t.selectPerson}
+                confirmLabel={t.confirmLine}
+                discardLabel={t.discardLine}
+                onChange={(patch) => updateDraft(draft.id, patch)}
+                onSelectPerson={() => setActiveDraftId(draft.id)}
+                onConfirm={() => updateDraft(draft.id, { confirmed: true, matchState: 'confirmed' })}
+                onDiscard={() => setDrafts(drafts.filter((d) => d.id !== draft.id))}
+              />
+            </Rise>
           );
         })}
       </ScrollView>
 
       <View className="px-5 pb-5 pt-2">
-        <Pressable
-          disabled={confirmedCount === 0 || saving}
-          onPress={finish}
-          className="rounded-2xl py-4"
-          style={{
-            backgroundColor: confirmedCount > 0 && !saving ? Porcelain.saffronDeep : Porcelain.line,
-          }}>
-          {saving ? (
+        {saving ? (
+          <View className="items-center rounded-full py-4" style={{ backgroundColor: Porcelain.saffronDeep }}>
             <ActivityIndicator color="#fff" />
-          ) : (
-            <Text
-              className="text-center text-base font-bold"
-              style={{
-                fontFamily: AppFonts.displayBold,
-                color: confirmedCount > 0 ? '#fff' : Porcelain.muted,
-              }}>
-              {t.saveConfirmed(confirmedCount)}
-            </Text>
-          )}
-        </Pressable>
+          </View>
+        ) : (
+          <SaffronButton
+            label={t.saveConfirmed(confirmedCount)}
+            onPress={finish}
+            disabled={confirmedCount === 0}
+          />
+        )}
       </View>
 
       <PickPersonSheet

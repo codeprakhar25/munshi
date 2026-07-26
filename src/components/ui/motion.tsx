@@ -31,7 +31,6 @@ export const softFade = (ms = 450) => FadeIn.duration(ms).easing(EASE_OUT);
 
 interface RiseProps {
   index?: number;
-  className?: string;
   style?: StyleProp<ViewStyle>;
   children?: React.ReactNode;
 }

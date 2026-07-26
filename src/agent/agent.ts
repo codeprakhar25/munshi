@@ -61,7 +61,18 @@ export function matchCustomers(khata: Khata, spoken: string | null | undefined):
   const scored = khata.customers.map((c) => ({ c, t: tier(c) })).filter((s) => s.t < 99);
   if (!scored.length) return [];
   const best = Math.min(...scored.map((s) => s.t));
-  return scored.filter((s) => s.t === best).map((s) => s.c);
+  const top = scored.filter((s) => s.t === best).map((s) => s.c);
+  if (top.length < 2) return top;
+
+  // Contact import gives every imported person a first-name alias, so a phone
+  // book with a "Ramesh Uncle" in it makes plain "रमेश" ambiguous against the
+  // Ramesh the merchant actually trades with — and they get asked to choose on
+  // every single utterance. Somebody with no transactions is far less likely to
+  // be meant than somebody with a running balance, so active khatas win.
+  // Two ACTIVE customers with the same name stay ambiguous, which is correct:
+  // that is the Ramesh Kumar / Ramesh Joshi case, and it must still be asked.
+  const active = top.filter((c) => c.entries.length > 0 || c.balance !== 0);
+  return active.length && active.length < top.length ? active : top;
 }
 
 const asPerson = (c: Customer): DraftPerson => ({

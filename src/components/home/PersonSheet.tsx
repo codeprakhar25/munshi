@@ -1,7 +1,9 @@
-import { Modal, Pressable as RNPressable, ScrollView as RNScroll, StyleSheet, View as RNView } from 'react-native';
+import { Modal, Pressable as RNPressable, ScrollView as RNScroll, StyleSheet } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { Customer } from '@/agent/types';
+import { fadeUp } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
 import { Text, View } from '@/tw';
 
@@ -24,7 +26,7 @@ export function PersonSheet({ customer, onClose }: Props) {
           onPress={(e) => e.stopPropagation()}>
           <View className="mb-2 flex-row items-start justify-between">
             <View className="flex-1 pr-3">
-              <Text className="text-2xl font-bold text-ink" style={{ fontFamily: AppFonts.displayBold }}>
+              <Text className="text-ink" style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 26, letterSpacing: -0.5 }}>
                 {customer.name}
               </Text>
               <Text className="mt-1 text-sm text-muted">{customer.phone || customer.aliases[0] || ''}</Text>
@@ -35,8 +37,8 @@ export function PersonSheet({ customer, onClose }: Props) {
           </View>
 
           <Text
-            className="mb-3 text-3xl font-bold"
-            style={{ fontFamily: AppFonts.displayBold, color: customer.balance > 0 ? Porcelain.rose : Porcelain.leaf }}>
+            className="mb-3"
+            style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 32, letterSpacing: -0.8, color: customer.balance > 0 ? Porcelain.rose : Porcelain.leaf }}>
             ₹{Math.max(0, customer.balance).toLocaleString('en-IN')}
           </Text>
 
@@ -48,23 +50,24 @@ export function PersonSheet({ customer, onClose }: Props) {
                 const pay = e.action === 'payment';
                 const when = new Date(e.ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
                 return (
-                  <View
-                    key={`${e.ts}-${i}`}
-                    className="flex-row items-center justify-between rounded-2xl border border-line px-3.5 py-3"
-                    style={{ backgroundColor: Porcelain.white }}>
-                    <View>
-                      <Text className="text-sm font-semibold text-ink">{e.label || (pay ? 'जमा' : 'उधार')}</Text>
-                      <Text className="mt-0.5 text-xs text-muted">{when}</Text>
+                  <Animated.View key={`${e.ts}-${i}`} entering={fadeUp(Math.min(i, 6), 0)}>
+                    <View
+                      className="flex-row items-center justify-between rounded-2xl border border-line px-3.5 py-3"
+                      style={{ backgroundColor: Porcelain.white }}>
+                      <View>
+                        <Text className="text-sm font-semibold text-ink">{e.label || (pay ? 'जमा' : 'उधार')}</Text>
+                        <Text className="mt-0.5 text-xs text-muted">{when}</Text>
+                      </View>
+                      <Text
+                        style={{
+                          fontFamily: AppFonts.serifSemiBold,
+                          fontSize: 17,
+                          color: pay ? Porcelain.leaf : Porcelain.rose,
+                        }}>
+                        {pay ? '−' : '+'}₹{e.amount}
+                      </Text>
                     </View>
-                    <Text
-                      style={{
-                        fontFamily: AppFonts.displayBold,
-                        fontSize: 16,
-                        color: pay ? Porcelain.leaf : Porcelain.rose,
-                      }}>
-                      {pay ? '−' : '+'}₹{e.amount}
-                    </Text>
-                  </View>
+                  </Animated.View>
                 );
               })
             )}

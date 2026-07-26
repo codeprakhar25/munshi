@@ -76,6 +76,10 @@ export const Fonts = Platform.select({
 });
 
 export const AppFonts = {
+  /** Fraunces — the mock's --serif. For brand marks, headings and rupee figures. */
+  serifBold: 'Fraunces_700Bold',
+  serifSemiBold: 'Fraunces_600SemiBold',
+  serifMedium: 'Fraunces_500Medium',
   displayExtraBold: 'Urbanist_800ExtraBold',
   displayBold: 'Urbanist_700Bold',
   displaySemiBold: 'Urbanist_600SemiBold',

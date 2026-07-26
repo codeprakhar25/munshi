@@ -2,9 +2,11 @@ import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { QuietButton, SaffronButton } from '@/components/ui/buttons';
+import { Rise } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
 import { useStrings } from '@/lib/i18n';
-import { Pressable, ScrollView, Text, TextInput, View } from '@/tw';
+import { ScrollView, Text, TextInput, View } from '@/tw';
 import { useOnboardingStore } from '@/store/onboarding-store';
 import { usePeopleStore } from '@/store/people-store';
 
@@ -44,7 +46,7 @@ export default function AliasMapScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }}>
       <View className="flex-row items-center justify-between px-5 pb-2 pt-3">
-        <Text className="text-xl font-bold text-ink" style={{ fontFamily: AppFonts.displayBold }}>
+        <Text className="text-ink" style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 24, letterSpacing: -0.5 }}>
           {t.mapTitle}
         </Text>
       </View>
@@ -53,41 +55,31 @@ export default function AliasMapScreen() {
         <Text className="mb-1 text-sm text-muted" style={{ fontFamily: AppFonts.body }}>
           {t.mapHint}
         </Text>
-        {people.map((p) => (
-          <View
-            key={p.id}
-            className="rounded-2xl border border-line bg-surface px-4 py-3"
-            style={{ backgroundColor: Porcelain.white }}>
-            <Text className="text-base font-bold text-ink" style={{ fontFamily: AppFonts.displaySemiBold }}>
-              {p.name}
-            </Text>
-            <Text className="mb-2 text-xs text-muted">{p.phone || '—'}</Text>
-            <TextInput
-              value={drafts[p.id] ?? ''}
-              onChangeText={(v) => setDrafts((d) => ({ ...d, [p.id]: v }))}
-              placeholder={t.mapAliasPh}
-              placeholderTextColor={Porcelain.muted}
-              className="rounded-xl border border-line px-3 py-2.5 text-base text-ink"
-              style={{ fontFamily: AppFonts.body, backgroundColor: Porcelain.paper2 }}
-            />
-          </View>
+        {people.map((p, i) => (
+          <Rise key={p.id} index={Math.min(i, 5)}>
+            <View
+              className="rounded-2xl border border-line bg-surface px-4 py-3"
+              style={{ backgroundColor: Porcelain.white }}>
+              <Text className="text-base font-bold text-ink" style={{ fontFamily: AppFonts.displaySemiBold }}>
+                {p.name}
+              </Text>
+              <Text className="mb-2 text-xs text-muted">{p.phone || '—'}</Text>
+              <TextInput
+                value={drafts[p.id] ?? ''}
+                onChangeText={(v) => setDrafts((d) => ({ ...d, [p.id]: v }))}
+                placeholder={t.mapAliasPh}
+                placeholderTextColor={Porcelain.muted}
+                className="border-b border-line px-0 py-2 text-lg text-ink"
+                style={{ fontFamily: AppFonts.serifMedium, backgroundColor: 'transparent' }}
+              />
+            </View>
+          </Rise>
         ))}
       </ScrollView>
 
-      <View className="gap-2.5 px-5 pb-6">
-        <Pressable
-          onPress={saveAndGo}
-          className="rounded-2xl py-4"
-          style={{ backgroundColor: Porcelain.saffronDeep }}>
-          <Text className="text-center text-base font-bold text-white" style={{ fontFamily: AppFonts.displayBold }}>
-            {t.mapDone}
-          </Text>
-        </Pressable>
-        <Pressable onPress={skip} className="rounded-2xl py-3">
-          <Text className="text-center text-sm font-bold text-muted" style={{ fontFamily: AppFonts.displaySemiBold }}>
-            {t.mapSkip}
-          </Text>
-        </Pressable>
+      <View className="gap-1.5 px-5 pb-6">
+        <SaffronButton label={t.mapDone} onPress={saveAndGo} />
+        <QuietButton label={t.mapSkip} onPress={skip} />
       </View>
     </SafeAreaView>
   );
