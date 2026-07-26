@@ -27,6 +27,7 @@
  * No `react-native` / `expo-*` / Node imports.
  */
 import { chatTools, log, type ChatMessage, type ToolSchema } from '../agent/sarvam';
+import { normalizeDigits } from './numerals';
 import type { ScanItem } from './types';
 
 interface StructuredAmount {
@@ -53,54 +54,52 @@ const STRUCTURE_TOOL: ToolSchema[] = [{
   function: {
     name: 'structure_ledger_lines',
     description:
-      'Read every line of a shopkeeper\'s handwritten udhaar (credit) book and say, for each tagged amount, '
-      + 'whose it is and which way the money moved. Call this exactly once, with one entry in `lines` for every '
-      + 'line you were given.',
+      'Extract ONLY owner + direction + optional item-label for every amount tag on a multilingual '
+      + 'Indian udhaar notebook page. Call exactly once. One `lines[]` entry per input line.',
     parameters: {
       type: 'object',
       properties: {
         lines: {
           type: 'array',
-          description: 'One entry per input line, in the order given. Never merge two lines and never drop the last one.',
+          description: 'One entry per input line, same order. Never merge, never drop the last line.',
           items: {
             type: 'object',
             properties: {
-              line: { type: 'number', description: 'The line number shown at the start of the input line.' },
+              line: { type: 'number', description: 'Line number from the input (1-based).' },
               amounts: {
                 type: 'array',
-                description: 'One entry per amount tag (a1, a2, ...) appearing on that line. Cover every tag.',
+                description: 'One object per tag (a1, a2, …) on that line. Cover every tag.',
                 items: {
                   type: 'object',
                   properties: {
                     tag: {
                       type: 'string',
-                      description: 'The tag exactly as it appeared in the line, e.g. "a1". Never invent a tag that was not shown.',
+                      description: 'Tag exactly as shown (a1, a2, …). Never invent tags.',
                     },
                     owner: {
                       type: 'string',
                       description:
-                        'The customer this amount belongs to, copied VERBATIM from the line in the script it was written in. '
-                        + 'A line usually names the person once at the start and every amount on it belongs to them. '
-                        + 'Leave empty only if the line truly names nobody.',
+                        'Customer name VERBATIM in the original script (Devanagari, Odia, Tamil, Latin, …). '
+                        + 'Continuation lines (`+ …`, amount-only under a named row, lines after `Name ->`) '
+                        + 'inherit the most recent named person above. Empty only if the whole page has no name yet.',
                     },
                     direction: {
                       type: 'string',
                       enum: ['udhaar', 'payment'],
                       description:
-                        'udhaar = the shopkeeper GAVE goods on credit and this is money OWED to them '
-                        + '(baaki, baki, udhar, liya, le gaya, or a bare "<name> ka 100 rs dudh ka"). '
-                        + 'payment = the customer HANDED OVER money against what they owed '
-                        + '(jama, jma, diye, diya, chukaya, wapas, paid). '
-                        + 'CRITICAL: "usme se 50 jma h" means "out of that, 50 has been deposited" — the 50 is a PAYMENT '
-                        + 'even though every other amount on the same line is udhaar. '
-                        + 'When a line names goods (dudh, tel, biscuit, saabun) next to an amount with no payment word, it is udhaar.',
+                        'udhaar = goods on credit / amount OWED (बाकी/baaki/udhaar/ବାକି/நிலுவை or goods words). '
+                        + 'payment = money paid in (जमा/jama/diye/ଜମା/செலுத்திய). '
+                        + '"usme se … jama" / partial-deposit clauses → payment for that tag only. '
+                        + 'Bare goods next to a tag with no payment word → udhaar.',
                     },
                     label: {
                       type: 'string',
-                      description: 'What was bought, if the line says (dudh, tel, biscuit). Copy it verbatim. Omit if not stated.',
+                      description:
+                        'Item/goods word(s) next to the tag, verbatim in the source script '
+                        + '(दूध, ଆଳୁ, biscuit). Omit if none.',
                     },
                   },
-                  required: ['tag', 'direction'],
+                  required: ['tag', 'owner', 'direction'],
                 },
               },
             },
@@ -113,16 +112,29 @@ const STRUCTURE_TOOL: ToolSchema[] = [{
   },
 }];
 
-const SYSTEM = `You read pages from an Indian shopkeeper's handwritten udhaar (credit) notebook.
+const SYSTEM = `You structure ONE page of an Indian shopkeeper's udhaar (credit) notebook.
 
-Each line records what one customer owes, and sometimes what they have paid back.
-The lines are informal Hindi, English or a mix, transcribed exactly as written — spellings
-vary, words are missing, the same name may be spelled two ways on one page.
+MULTILINGUAL — the page may be Hindi/Devanagari, Marathi, Odia, Tamil, Telugu, Kannada,
+Bengali, Gujarati, Punjabi, English, or mixed scripts on the same page. Keep every name
+and label in the script it appears; never translate names to English.
 
-Rupee amounts have ALREADY been read off the page for you and replaced with tags like a1, a2.
-You must never write a rupee figure. Refer to money only by its tag.
+WHAT TO EXTRACT (only these — nothing else):
+  For each amount tag a1, a2, … → { owner, direction, label? }
+  - owner: person who owes / paid, copied verbatim
+  - direction: "udhaar" (credit out) or "payment" (money in)
+  - label: goods word if present
 
-For every tag say who it belongs to and which way it moved. Cover every tag on every line.`;
+AMOUNTS ARE ALREADY READ. Tags replaced every rupee figure. Never write digits or ₹.
+Never invent tags. Cover every tag on every line.
+
+CONTINUATION / LAYOUT RULES (critical):
+  - "Name -> …" or "Name – …" : Name owns every tag on that line
+  - A following line that starts with "+" or has only amounts/goods and no new name
+    belongs to the SAME person as the line above
+  - Several tags on one named line → same owner for all of them
+  - "usme se … jama/जमा" (or equivalent) flips ONLY the tags after that clause to payment
+
+Be brief. Call the tool immediately — do not narrate the page.`;
 
 /** A line, its tags, and the items those tags stand for. */
 interface TaggedLine {
@@ -145,7 +157,8 @@ function tagLines(items: ScanItem[]): TaggedLine[] {
   }
 
   return [...byLine.values()].map((group, index) => {
-    let text = group[0].rawText;
+    // Normalize Indic digits first so "୫୦" / "५०" become "50" and tag replace hits.
+    let text = normalizeDigits(group[0].rawText);
     // Longest raw first, so replacing "50" cannot chew a digit out of "150".
     const ordered = [...group].sort((a, b) => b.amount.toString().length - a.amount.toString().length);
     ordered.forEach((item) => {
@@ -195,7 +208,8 @@ export async function structureItems(
       // characters of hidden reasoning and returns no tool call at all, and the
       // page silently falls back to keyword rules with nobody the wiser.
       tool_choice: { type: 'function', function: { name: 'structure_ledger_lines' } },
-      max_tokens: 2500,
+      // 30b burns reasoning tokens; 2500 often finished with finish=length and no tool args.
+      max_tokens: 6000,
     });
     lines = calls[0]?.args?.lines ?? [];
   } catch (err) {

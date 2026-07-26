@@ -34,10 +34,13 @@ interface Strings {
   talkMunshi: string;
   entriesN: (n: number) => string;
   scanTitle: string;
+  scanSubtitle: string;
   scanCamera: string;
+  scanShutter: string;
   scanGallery: string;
   scanPdf: string;
   scanFrame: string;
+  scanAnyScript: string;
   processingUploading: string;
   processingProcessing: string;
   processingDownloading: string;
@@ -47,9 +50,11 @@ interface Strings {
   /** @deprecated alias of processingMatching — kept for older call sites */
   processingParsing: string;
   reviewTitle: string;
+  reviewSubtitle: (n: number) => string;
   reviewEmpty: string;
   confirmLine: string;
   discardLine: string;
+  addMorePages: string;
   saveConfirmed: (n: number) => string;
   selectPerson: string;
   whoIsThis: string;
@@ -98,11 +103,14 @@ const en: Strings = {
   scanPill: 'Scan',
   talkMunshi: 'Talk to Munshi',
   entriesN: (n) => `${n} entries`,
-  scanTitle: 'Scan',
+  scanTitle: 'Scan bahi',
+  scanSubtitle: 'One clear page. Any Indian script works.',
   scanCamera: 'Camera',
-  scanGallery: 'Gallery',
+  scanShutter: 'Take photo',
+  scanGallery: 'Choose from gallery',
   scanPdf: 'PDF',
-  scanFrame: 'Align the page',
+  scanFrame: 'Fit the page in the frame',
+  scanAnyScript: 'Hindi · Odia · Tamil · English',
   processingUploading: 'Uploading…',
   processingProcessing: 'Reading your bahi…',
   processingDownloading: 'Fetching the page…',
@@ -110,10 +118,12 @@ const en: Strings = {
   processingStructuring: 'Understanding lines…',
   processingMatching: 'Matching people…',
   processingParsing: 'Matching people…',
-  reviewTitle: 'Confirm',
+  reviewTitle: 'Check & confirm',
+  reviewSubtitle: (n) => (n === 1 ? '1 person on this page' : `${n} people on this page`),
   reviewEmpty: 'No entries found — try a clearer photo.',
   confirmLine: 'Confirm',
   discardLine: 'Skip',
+  addMorePages: 'Scan another page',
   saveConfirmed: (n) => `Save ${n} ${n === 1 ? 'person' : 'people'}`,
   selectPerson: 'Select person',
   whoIsThis: 'Whose khata?',
@@ -162,11 +172,14 @@ const hi: Strings = {
   scanPill: 'स्कैन',
   talkMunshi: 'मुंशी से बात',
   entriesN: (n) => `${n} एंट्री`,
-  scanTitle: 'स्कैन',
+  scanTitle: 'बही स्कैन',
+  scanSubtitle: 'एक साफ़ पेज। कोई भी भारतीय लिपि चलेगी।',
   scanCamera: 'कैमरा',
-  scanGallery: 'गैलरी',
+  scanShutter: 'फोटो लें',
+  scanGallery: 'गैलरी से चुनें',
   scanPdf: 'PDF',
-  scanFrame: 'पेज संरेखित करें',
+  scanFrame: 'पेज फ्रेम में लाएँ',
+  scanAnyScript: 'हिन्दी · ओड़िया · तमिल · अंग्रेज़ी',
   processingUploading: 'भेजा जा रहा है…',
   processingProcessing: 'बही पढ़ रहे हैं…',
   processingDownloading: 'पेज ला रहे हैं…',
@@ -174,10 +187,12 @@ const hi: Strings = {
   processingStructuring: 'लाइन समझ रहे हैं…',
   processingMatching: 'लोग मिला रहे हैं…',
   processingParsing: 'लोग मिला रहे हैं…',
-  reviewTitle: 'कन्फर्म',
+  reviewTitle: 'जाँचें · कन्फर्म',
+  reviewSubtitle: (n) => (n === 1 ? 'इस पेज से 1 व्यक्ति' : `इस पेज से ${n} व्यक्ति`),
   reviewEmpty: 'एंट्री नहीं मिली — साफ़ फोटो आज़माएँ।',
   confirmLine: 'जोड़ो',
   discardLine: 'छोड़ो',
+  addMorePages: 'और पेज स्कैन',
   saveConfirmed: (n) => `${n} ख़ाता सेव`,
   selectPerson: 'व्यक्ति चुनें',
   whoIsThis: 'किसका ख़ाता?',

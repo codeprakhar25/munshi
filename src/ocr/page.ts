@@ -15,7 +15,7 @@
  * No `react-native` / `expo-*` / Node imports.
  */
 import { parseTable, type ColumnRole } from './columns';
-import { parseLine, splitLines } from './lines';
+import { looksLikeContinuation, parseLine, splitLines } from './lines';
 import { parseAmount } from './numerals';
 import type { ItemDirection, ScanItem } from './types';
 
@@ -24,7 +24,9 @@ export interface PageBlock {
   coordinates: { x1: number; y1: number; x2: number; y2: number };
   layout_tag:
     | 'section-title' | 'header' | 'paragraph' | 'table'
-    | 'image' | 'image-caption' | 'footnote' | 'footer';
+    | 'image' | 'image-caption' | 'footnote' | 'footer'
+    | 'sidebar'
+    | string;
   confidence: number;
   reading_order: number;
   text: string;
@@ -33,18 +35,31 @@ export interface PageBlock {
 /**
  * `image` blocks are dropped outright: on non-text regions (a QR code, a stain)
  * Sarvam emitted confident hallucinated captions during testing. `header`,
- * `footer` and `section-title` are page furniture — the old parser turned the
- * page title into a line item the merchant had to dismiss.
+ * `footer`, `section-title`, `sidebar` are page furniture — the old parser
+ * turned the page title into a line item the merchant had to dismiss.
  */
 const SKIP_TAGS = new Set([
-  'image', 'image-caption', 'footer', 'footnote', 'header', 'section-title',
+  'image', 'image-caption', 'footer', 'footnote', 'header', 'section-title', 'sidebar',
 ]);
 
 function fromTextBlock(block: PageBlock): ScanItem[] {
   const out: ScanItem[] = [];
+  // Carry the last named person across continuation rows:
+  //   "रमेश सोलंकी -> 50 Rs दूध +"
+  //   "100 ₹ हल्दी"          ← same person
+  //   "+ 50 Rs चाय पत्ती"    ← same person as line above
+  let lastName: string | null = null;
+
   splitLines(block.text).forEach((line, row) => {
     const parsed = parseLine(line);
     if (!parsed) return;
+
+    if (parsed.nameToken) {
+      lastName = parsed.nameToken;
+    } else if (looksLikeContinuation(line) && lastName) {
+      parsed.nameToken = lastName;
+    }
+
     parsed.items.forEach((item, i) =>
       out.push({
         rawText: parsed.text,

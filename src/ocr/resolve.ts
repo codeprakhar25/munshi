@@ -114,7 +114,8 @@ export async function attachContactMatches(
 ): Promise<{ drafts: Draft[]; stats: ResolveStats }> {
   const targets = pool(ctx);
   const distinct = [...new Set(drafts.map((d) => d.name_spoken).filter((n): n is string => !!n))];
-  const latin = await transliterateNames(distinct, ctx.language ?? 'hi-IN');
+  // `auto` — page may be Odia/Tamil/… even when the app UI language is Hindi.
+  const latin = await transliterateNames(distinct, ctx.language ?? 'auto');
 
   const latinOf = new Map<string, string | null>();
   distinct.forEach((name, i) => latinOf.set(name, latin[i]));

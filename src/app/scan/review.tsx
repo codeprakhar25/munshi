@@ -1,14 +1,15 @@
+import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ActivityIndicator } from 'react-native';
+import { ActivityIndicator, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { commitDrafts } from '@/agent/agent';
 import type { Draft, DraftPerson } from '@/agent/types';
 import { LineItemCard } from '@/components/scan/line-item-card';
 import { PickPersonSheet } from '@/components/scan/pick-person-sheet';
-import { SaffronButton } from '@/components/ui/buttons';
-import { Rise } from '@/components/ui/motion';
+import { LineButton, SaffronButton } from '@/components/ui/buttons';
+import { AmbientBackdrop, Rise } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
 import { loadKhata, saveKhata } from '@/db/khata';
 import { useStrings } from '@/lib/i18n';
@@ -46,6 +47,7 @@ export default function ScanReviewScreen() {
   const drafts = useScanStore((s) => s.drafts);
   const updateDraft = useScanStore((s) => s.updateDraft);
   const setDrafts = useScanStore((s) => s.setDrafts);
+  const setSource = useScanStore((s) => s.setSource);
   const resetScan = useScanStore((s) => s.reset);
 
   const addPerson = usePeopleStore((s) => s.addPerson);
@@ -53,8 +55,6 @@ export default function ScanReviewScreen() {
 
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-
-  // Matching already ran in processing via attachContactMatches — no second pass.
 
   const activeDraft = drafts.find((d) => d.id === activeDraftId) ?? null;
   const sheetMode: 'pick' | 'contacts' =
@@ -94,10 +94,7 @@ export default function ScanReviewScreen() {
       source: 'contact',
       contactId: contact.id,
     });
-    updateDraft(
-      activeDraftId,
-      attachPerson(draft, personFromPeople(person, 0, true)),
-    );
+    updateDraft(activeDraftId, attachPerson(draft, personFromPeople(person, 0, true)));
     closeSheet();
   }
 
@@ -125,6 +122,15 @@ export default function ScanReviewScreen() {
 
   const confirmedCount = drafts.filter((d) => d.confirmed && !d.already_imported).length;
 
+  async function addMore() {
+    const perm = await ImagePicker.requestCameraPermissionsAsync();
+    if (perm.status !== 'granted') return;
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.85 });
+    if (result.canceled || !result.assets[0]) return;
+    setSource(result.assets[0].uri, 'image', entry, { append: true });
+    router.push(`/scan/processing?entry=${entry}`);
+  }
+
   async function finish() {
     if (saving || confirmedCount === 0) return;
     setSaving(true);
@@ -135,7 +141,6 @@ export default function ScanReviewScreen() {
         .drafts
         .filter((d) => d.confirmed && !d.already_imported && d.status === 'ready');
 
-      // Expand itemized cards into per-item drafts for the ledger writer.
       const expanded: Draft[] = [];
       for (const d of confirmed) {
         const items = d.items ?? [];
@@ -157,7 +162,6 @@ export default function ScanReviewScreen() {
         }
       }
 
-      // Contact-sourced / walk-in: create khata rows, then fill customer_id.
       const ready = ensureCustomersForDrafts(khata, expanded);
       commitDrafts(khata, ready);
       await saveKhata(khata);
@@ -170,21 +174,53 @@ export default function ScanReviewScreen() {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }}>
-      <View className="px-5 pb-2 pt-3">
+    <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }} edges={['top', 'bottom']}>
+      <AmbientBackdrop image="radial-gradient(circle at 85% 0%, #ffedd5 0%, rgba(255,237,213,0) 50%)" />
+      <AmbientBackdrop image="radial-gradient(circle at 0% 100%, #e0e7ff 0%, rgba(224,231,255,0) 42%)" />
+
+      <View className="px-5 pb-3 pt-2">
         <Text
-          className="text-ink"
-          style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 24, letterSpacing: -0.5 }}>
+          style={{
+            fontFamily: AppFonts.serifSemiBold,
+            fontSize: 26,
+            color: Porcelain.ink,
+            letterSpacing: -0.6,
+          }}>
           {t.reviewTitle}
         </Text>
+        <Text
+          style={{
+            fontFamily: AppFonts.body,
+            fontSize: 14,
+            color: Porcelain.muted,
+            marginTop: 4,
+          }}>
+          {t.reviewSubtitle(drafts.length)}
+        </Text>
+        {confirmedCount > 0 && (
+          <View style={styles.progressPill}>
+            <Text
+              style={{
+                fontFamily: AppFonts.displayBold,
+                fontSize: 12,
+                color: Porcelain.saffronDeep,
+              }}>
+              {confirmedCount}/{drafts.filter((d) => !d.already_imported).length} ✓
+            </Text>
+          </View>
+        )}
       </View>
 
-      <ScrollView className="flex-1 px-5" contentContainerClassName="gap-2.5 pb-4">
+      <ScrollView className="flex-1 px-5" contentContainerClassName="gap-3 pb-6">
         {drafts.length === 0 && (
-          <Text className="mt-8 text-center text-sm text-muted">{t.reviewEmpty}</Text>
+          <Text
+            className="mt-10 text-center"
+            style={{ fontFamily: AppFonts.body, color: Porcelain.muted }}>
+            {t.reviewEmpty}
+          </Text>
         )}
         {drafts.map((draft, i) => (
-          <Rise key={draft.id} index={Math.min(i, 5)}>
+          <Rise key={draft.id} index={Math.min(i, 6)}>
             <LineItemCard
               draft={draft}
               selectPersonLabel={t.selectPerson}
@@ -203,19 +239,20 @@ export default function ScanReviewScreen() {
         ))}
       </ScrollView>
 
-      <View className="px-5 pb-5 pt-2">
+      <View style={styles.footer}>
         {saving ? (
-          <View
-            className="items-center rounded-full py-4"
-            style={{ backgroundColor: Porcelain.saffronDeep }}>
+          <View style={styles.savingBar}>
             <ActivityIndicator color="#fff" />
           </View>
         ) : (
-          <SaffronButton
-            label={t.saveConfirmed(confirmedCount)}
-            onPress={finish}
-            disabled={confirmedCount === 0}
-          />
+          <>
+            <SaffronButton
+              label={t.saveConfirmed(confirmedCount)}
+              onPress={finish}
+              disabled={confirmedCount === 0}
+            />
+            <LineButton label={t.addMorePages} onPress={addMore} style={{ marginTop: 10 }} />
+          </>
         )}
       </View>
 
@@ -237,3 +274,28 @@ export default function ScanReviewScreen() {
     </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  progressPill: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: Porcelain.saffronMist,
+  },
+  footer: {
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Porcelain.line,
+    backgroundColor: 'rgba(251,249,246,0.92)',
+  },
+  savingBar: {
+    alignItems: 'center',
+    borderRadius: 999,
+    paddingVertical: 16,
+    backgroundColor: Porcelain.saffronDeep,
+  },
+});

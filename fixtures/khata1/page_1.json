@@ -1,0 +1,21 @@
+{
+  "page_num": 1,
+  "image_width": 1200,
+  "image_height": 1600,
+  "created_at": "2026-07-26T09:31:50.253588+00:00",
+  "blocks": [
+    {
+      "block_id": "20260726_44ea7000-cdb4-45f2-8fca-7322b3304f48_1_block_000",
+      "coordinates": {
+        "x1": 119,
+        "y1": 48,
+        "x2": 1092,
+        "y2": 826
+      },
+      "layout_tag": "paragraph",
+      "confidence": 0.4409748911857605,
+      "reading_order": 1,
+      "text": "रमेश सोलंकी -> 50 Rs दूध +\n100 ₹ हल्दी\nराजु चौधरी -> 800 Rs मसाला\n+ 50 Rs चाय पत्ती\nसुनीता वाणी -> 70 Rs अण्डे\n+ 30 Rs पेन\nकरण चोपी -> 500 Rs बाकी"
+    }
+  ]
+}

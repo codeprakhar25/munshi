@@ -66,7 +66,13 @@ async function main() {
     return `${pad(d.name_spoken ?? '(no name)', 16)} ${pad(who, 26)} ${pad(money, 7)} ${pad(d.status, 14)}${prices}`;
   };
 
-  const report = await parseAndResolve(blocks, { khata, contacts, skipModel });
+  // Script autodetection: Odia/Tamil/… pages must not be forced through hi-IN.
+  const report = await parseAndResolve(blocks, {
+    khata,
+    contacts,
+    skipModel,
+    scriptLanguage: 'auto',
+  });
 
   console.log(`\n  ${blocks.length} blocks -> ${report.items} items -> ${report.match.cards} cards`);
   console.log(

@@ -141,13 +141,29 @@ function labelFor(text: string, amount: FoundAmount, nextIndex: number): string 
  * that looks confident is worse than an empty person chip: the merchant taps
  * through it. `null` routes the line to the contact picker instead.
  */
+/** Arrow / dash separators used in "Name -> 50 Rs dudh" register layouts. */
+const NAME_SEP_RE = /^(?:->|→|⇒|—|–|-)$/;
+
+/**
+ * True when this line is a continuation of the previous person's row
+ * (`+ 50 Rs चाय`, bare `100 ₹ हल्दी` under a named line).
+ */
+export function looksLikeContinuation(text: string): boolean {
+  const t = text.replace(BULLET_RE, '').trim();
+  if (/^\+\s*/.test(t)) return true;
+  // Amount-first with no name tokens ahead of the first number.
+  return extractName(t) === null && findAmounts(t).length > 0;
+}
+
 export function extractName(text: string): string | null {
-  const stripped = text.replace(BULLET_RE, '');
+  // Strip list bullets and leading "+" continuation marks before naming.
+  const stripped = text.replace(BULLET_RE, '').replace(/^\+\s*/, '');
   const tokens = tokenize(stripped);
 
   const parts: string[] = [];
   for (const tok of tokens) {
     const bare = tok.replace(/[.,;:]$/, '');
+    if (NAME_SEP_RE.test(bare)) break;
     if (CASE_MARKERS.includes(lower(bare))) break;
     // Hindi often writes the marker joined on: "रमेशका". Split it back off.
     const joined = CASE_MARKERS.find(
@@ -159,6 +175,8 @@ export function extractName(text: string): string | null {
     }
     if (/\d/.test(normalizeDigits(bare))) break;
     if (NOISE_WORDS.has(lower(bare))) break;
+    // Lone "+" is not a name.
+    if (bare === '+') continue;
     parts.push(bare);
     // Two tokens is a full name; more than that and we are eating the sentence.
     if (parts.length === 2) break;

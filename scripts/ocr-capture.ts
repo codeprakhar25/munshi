@@ -33,7 +33,8 @@ async function main() {
   }
   if (!file) {
     console.error(
-      '\n  usage: npm run ocr:capture -- ./assets/images/khata1.jpeg [--name my-page] [--lang hi-IN]\n',
+      '\n  usage: npm run ocr:capture -- ./assets/images/khata1.jpeg [--name my-page] [--lang hi-IN]\n'
+        + '         Odia: --lang or-IN   Tamil: --lang ta-IN   (Doc Intelligence page language)\n',
     );
     process.exit(1);
   }
@@ -45,6 +46,7 @@ async function main() {
 
   const source = resolve(process.cwd(), file);
   const name = flag('name', basename(file, extname(file)));
+  // Default hi-IN for Hindi demo pages; Odia/Tamil/etc: pass --lang or-IN / ta-IN.
   const language = flag('lang', 'hi-IN') as DocLanguage;
   const kind = extname(file).toLowerCase() === '.pdf' ? 'pdf' : 'image';
 
