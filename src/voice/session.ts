@@ -115,6 +115,54 @@ export class VoiceSession {
 
   get isListening(): boolean { return this.listening; }
 
+  // ---- overlay API, used by src/app/home.tsx --------------------------------
+
+  /**
+   * Open a conversation. An optional greeting is spoken FIRST and the mic only
+   * opens once it has played out — the half-duplex gate would drop those frames
+   * anyway, and starting to listen underneath our own voice is how Saaras ends
+   * up transcribing the agent (POC finding #4).
+   */
+  async startConversation(greet?: string): Promise<void> {
+    if (greet) await this.speakOnly(greet);
+    await this.start();
+  }
+
+  async stopConversation(): Promise<void> {
+    this.audio.stopPlayback();
+    await this.stop();
+  }
+
+  /**
+   * The merchant talked over the agent. Cut the audio immediately and reopen the
+   * mic — waiting for the sentence to finish is what makes an agent feel deaf.
+   */
+  bargeIn(): void {
+    log('barge_in', {});
+    this.tts?.close();
+    this.tts = null;
+    this.audio.stopPlayback();
+  }
+
+  /** Speak a line without running a turn — greetings, prompts, errors. */
+  private async speakOnly(text: string): Promise<void> {
+    if (!text.trim()) return;
+    this.audio.beginSpeaking();
+    const tts = this.tts = new TtsSocket({
+      onAudio: (bytes) => this.audio.pushAudio(bytes),
+      onDone: () => this.audio.endSpeaking(),
+      onError: (msg) => this.cb.onView({ error: msg }),
+    });
+    tts.warm(this.stt?.lang ?? 'hi-IN', this.audio.playbackRate);
+    this.cb.onView({ state: 'speaking', reply: text });
+    try {
+      await tts.speak(text);
+      await this.audio.waitForIdle();
+    } finally {
+      if (this.tts === tts) this.tts = null;
+    }
+  }
+
   private arm(): void {
     if (this.endTimer) clearTimeout(this.endTimer);
     this.endTimer = setTimeout(() => void this.fire(), END_SILENCE_MS);
