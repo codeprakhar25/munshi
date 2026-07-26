@@ -4,7 +4,7 @@ import { ActivityIndicator, Image, StyleSheet, View as RNView } from 'react-nati
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import type { Khata } from '@/agent/types';
-import { AmbientBackdrop, Gradient, PressScale, Rise, useBreath, useCountUp } from '@/components/ui/motion';
+import { AmbientBackdrop, GlowDisc, Gradient, PressScale, Rise, useBreath, useCountUp } from '@/components/ui/motion';
 import { VoiceOverlay } from '@/components/voice/VoiceOverlay';
 import { AppFonts, Porcelain } from '@/constants/theme';
 import { loadKhata, resetKhata, totalDue } from '@/db/khata';
@@ -98,8 +98,8 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }} edges={['top']}>
       {/* The mock's #screen-shell ambience: warm saffron top-right, cool indigo bottom-left. */}
-      <AmbientBackdrop image="radial-gradient(circle at 85% 0%, #ffedd5 0%, rgba(255,237,213,0) 55%)" />
-      <AmbientBackdrop image="radial-gradient(circle at 0% 100%, #e0e7ff 0%, rgba(224,231,255,0) 45%)" />
+      <AmbientBackdrop image="linear-gradient(200deg, rgba(255,237,213,0.75) 0%, rgba(255,237,213,0) 38%)" />
+      <AmbientBackdrop image="linear-gradient(20deg, rgba(224,231,255,0.6) 0%, rgba(224,231,255,0) 32%)" />
 
       <View className="flex-row items-center justify-between px-5 pb-2 pt-2">
         {/* Long-press: restore the seed ledger — the between-demos reset. */}
@@ -228,17 +228,17 @@ export default function HomeScreen() {
           {/* Munshi FAB — breathing saffron halo behind, warm gradient wash over the face. */}
           <RNView pointerEvents="box-none" style={styles.fabWrap}>
             <Animated.View pointerEvents="none" style={[styles.fabHalo, fabHalo]}>
-              <Gradient
-                image="radial-gradient(circle at 50% 50%, rgba(245,158,11,0.4) 0%, rgba(245,158,11,0) 70%)"
-                style={StyleSheet.absoluteFill}
-              />
+              <GlowDisc size={130} rgb="245,158,11" />
             </Animated.View>
             <PressScale scaleTo={0.94} onPress={openVoice} style={styles.fab}>
-              <Image source={require('../../assets/images/munshi-face.png')} style={{ width: '100%', height: '100%' }} />
+              <Image
+                source={require('../../assets/images/munshi-face.png')}
+                style={{ width: '100%', height: '100%', borderRadius: 37 }}
+              />
               <Gradient
                 pointerEvents="none"
                 image="linear-gradient(180deg, rgba(217,119,6,0) 45%, rgba(217,119,6,0.35) 100%)"
-                style={StyleSheet.absoluteFill}
+                style={[StyleSheet.absoluteFill, { borderRadius: 37 }]}
               />
             </PressScale>
           </RNView>
@@ -304,8 +304,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 130,
     height: 130,
-    borderRadius: 65,
-    overflow: 'hidden',
   },
   fab: {
     width: 74,

@@ -22,6 +22,12 @@ export interface Entry {
   after: number;
   /** Free text: what was bought, or how it was paid. */
   label?: string;
+  /**
+   * Rupees paid beyond what was owed. Balances never go negative, but the excess
+   * must not vanish either — it is recorded here and spoken aloud, so a merchant
+   * can see money that was handed over and did not land on a balance.
+   */
+  overpaid?: number;
 }
 
 export interface Customer {
@@ -58,7 +64,7 @@ export interface Khata {
  * Everything in the ledger passes through this state first — see ARCHITECTURE.md §0
  * for why the confirm gate is a correctness feature rather than UX polish.
  */
-export type DraftKind = 'payment' | 'udhaar' | 'correction' | 'new_customer';
+export type DraftKind = 'payment' | 'udhaar' | 'correction' | 'new_customer' | 'delete_last';
 
 export type DraftStatus =
   /** Complete and priced — waiting only for confirmation. */
@@ -181,7 +187,7 @@ export interface Turn {
   stage: Stage;
   drafts: Draft[];
   /** Non-empty only on the turn that commits. */
-  committed: { customer_id: string; name: string; name_en: string; before: number; after: number; amount: number }[];
+  committed: { customer_id: string; name: string; name_en: string; before: number; after: number; amount: number; overpaid?: number }[];
   /** True if this turn changed the khata. */
   wrote: boolean;
   khata: Khata;

@@ -80,6 +80,12 @@ const who = (d: Draft, l: ReplyLang) =>
 /** A single pending line, read back with both balances so it can be checked. */
 function pending(d: Draft, l: ReplyLang): string | null {
   if (d.status === 'ready') {
+    if (d.kind === 'delete_last') {
+      const what = d.label ? `${d.label} ` : '';
+      return l === 'hi'
+        ? `${who(d, l)} की आखिरी एंट्री — ${what}${rupees(d.amount ?? 0, l)} — हटा दूँ?`
+        : `Remove ${who(d, l)}'s last entry — ${what}${rupees(d.amount ?? 0, l)}?`;
+    }
     if (d.kind === 'new_customer') {
       return l === 'hi'
         ? `${who(d, l)} का नया खाता, ${rupees(d.amount ?? 0, l)} उधार। लिख दूँ?`
@@ -128,6 +134,16 @@ export function templateReply(ctx: ReplyContext, l: ReplyLang | null): string | 
   if (!l) return null;
 
   if (ctx.committed.length) {
+    // Never let an overpayment pass silently: the balance stops at zero, so
+    // without saying this the extra rupees would simply not appear anywhere.
+    const over = ctx.committed.filter((c) => c.overpaid);
+    if (over.length === 1 && ctx.committed.length === 1) {
+      const c = over[0];
+      const who2 = l === 'en' ? c.name_en : (c.name ?? c.name_en);
+      return l === 'hi'
+        ? `${who2} का हिसाब पूरा हुआ, ${c.overpaid} रुपये ज़्यादा दिए।`
+        : `${who2} is fully settled, and paid ${c.overpaid} rupees extra.`;
+    }
     // Past three names, reading every balance back is a recital the merchant
     // stands through — and they can see the rows update. Acknowledge and stop.
     if (ctx.committed.length >= 3) {

@@ -47,7 +47,7 @@ export default function ContactsPermissionScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }}>
-      <AmbientBackdrop image="radial-gradient(circle at 50% 0%, #FEF3C7 0%, rgba(254,243,199,0) 60%)" />
+      <AmbientBackdrop image="linear-gradient(180deg, rgba(254,243,199,0.8) 0%, rgba(254,243,199,0) 45%)" />
       <View className="flex-1 justify-end px-6 pb-7">
         <Rise index={0}>
           <View style={styles.icon}>

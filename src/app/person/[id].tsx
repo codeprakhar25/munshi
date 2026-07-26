@@ -1,40 +1,88 @@
 /**
  * Full-screen passbook for one customer: balance, udhaar/jama totals, and the
  * complete entry timeline with running balances — the digital page of the bahi.
+ *
+ * Deleting: trash in the header removes the whole khata (confirmed first);
+ * long-pressing an entry removes just that line. Removal re-runs the fold —
+ * before/after are rebuilt for every remaining entry and the balance re-derived,
+ * so the passbook stays arithmetically consistent (never hand-edited).
  */
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View as RNView } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, View as RNView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { Customer } from '@/agent/types';
+import { deriveBalance } from '@/agent/agent';
+import type { Entry, Khata } from '@/agent/types';
 import { AmbientBackdrop, PressScale, Rise } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
-import { loadKhata } from '@/db/khata';
+import { loadKhata, saveKhata } from '@/db/khata';
 import { ScrollView, Text, View } from '@/tw';
+
+/** Recompute the frozen before/after chain after an entry is removed. */
+function rebuildChain(entries: Entry[]): void {
+  let b = 0;
+  for (const e of entries) {
+    e.before = b;
+    b = e.action === 'payment' ? b - e.amount : e.action === 'correction' ? e.amount : b + e.amount;
+    e.after = b;
+  }
+}
 
 export default function PersonScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [customer, setCustomer] = useState<Customer | null | 'missing'>(null);
+  const [khata, setKhata] = useState<Khata | null>(null);
 
   useEffect(() => {
     let alive = true;
-    void (async () => {
-      const khata = await loadKhata();
-      if (!alive) return;
-      setCustomer(khata.customers.find((c) => c.id === id) ?? 'missing');
-    })();
+    void loadKhata().then((k) => { if (alive) setKhata(k); });
     return () => { alive = false; };
   }, [id]);
 
-  if (customer === null) {
+  const customer = khata?.customers.find((c) => c.id === id) ?? null;
+
+  function confirmDeleteCustomer() {
+    if (!khata || !customer) return;
+    Alert.alert('खाता हटाएँ?', `${customer.name} का पूरा खाता और सारी एंट्री हट जाएँगी।`, [
+      { text: 'नहीं', style: 'cancel' },
+      {
+        text: 'हटाओ',
+        style: 'destructive',
+        onPress: () => {
+          khata.customers = khata.customers.filter((c) => c.id !== customer.id);
+          void saveKhata(khata).then(() => router.back());
+        },
+      },
+    ]);
+  }
+
+  function confirmDeleteEntry(entryIndex: number) {
+    if (!khata || !customer) return;
+    const e = customer.entries[entryIndex];
+    if (!e) return;
+    Alert.alert('यह एंट्री हटाएँ?', `${e.label || (e.action === 'payment' ? 'जमा' : 'उधार')} — ₹${e.amount}`, [
+      { text: 'नहीं', style: 'cancel' },
+      {
+        text: 'हटाओ',
+        style: 'destructive',
+        onPress: () => {
+          customer.entries.splice(entryIndex, 1);
+          rebuildChain(customer.entries);
+          customer.balance = deriveBalance(customer.entries);
+          void saveKhata(khata).then(() => setKhata({ ...khata }));
+        },
+      },
+    ]);
+  }
+
+  if (!khata) {
     return (
       <SafeAreaView style={styles.fill}>
         <ActivityIndicator color={Porcelain.saffronDeep} />
       </SafeAreaView>
     );
   }
-  if (customer === 'missing') {
+  if (!customer) {
     return (
       <SafeAreaView style={styles.fill}>
         <Text className="text-base text-muted">—</Text>
@@ -42,24 +90,28 @@ export default function PersonScreen() {
     );
   }
 
-  const events = [...customer.entries].reverse();
+  const events = customer.entries
+    .map((e, entryIndex) => ({ e, entryIndex }))
+    .reverse();
   const inCredit = customer.balance < 0;
   const totalUdhaar = customer.entries
-    .filter((e) => e.action === 'new_udhaar' || e.action === 'opening')
-    .reduce((s, e) => s + e.amount, 0);
+    .filter((x) => x.action === 'new_udhaar' || x.action === 'opening')
+    .reduce((s, x) => s + x.amount, 0);
   const totalPaid = customer.entries
-    .filter((e) => e.action === 'payment')
-    .reduce((s, e) => s + e.amount, 0);
+    .filter((x) => x.action === 'payment')
+    .reduce((s, x) => s + x.amount, 0);
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }} edges={['top']}>
-      <AmbientBackdrop image="radial-gradient(circle at 85% 0%, #ffedd5 0%, rgba(255,237,213,0) 55%)" />
+      <AmbientBackdrop image="linear-gradient(200deg, rgba(255,237,213,0.75) 0%, rgba(255,237,213,0) 38%)" />
 
       <View className="flex-row items-center justify-between px-4 pb-1 pt-2">
         <PressScale onPress={() => router.back()} style={styles.ghostIcon}>
           <Text className="text-xl text-ink">←</Text>
         </PressScale>
-        <View style={{ width: 40 }} />
+        <PressScale onPress={confirmDeleteCustomer} style={styles.ghostIcon}>
+          <Text style={{ fontSize: 15 }}>🗑️</Text>
+        </PressScale>
       </View>
 
       <ScrollView className="flex-1 px-5" contentContainerClassName="pb-10">
@@ -110,12 +162,15 @@ export default function PersonScreen() {
               <Text className="text-sm text-muted">—</Text>
             </View>
           ) : (
-            events.map((e, i) => {
+            events.map(({ e, entryIndex }, i) => {
               const pay = e.action === 'payment';
               const when = new Date(e.ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
               return (
-                <Rise key={`${e.ts}-${i}`} index={3 + Math.min(i, 5)}>
-                  <View className="flex-row items-center justify-between rounded-2xl border border-line px-4 py-3.5" style={{ backgroundColor: Porcelain.white }}>
+                <Rise key={`${e.ts}-${entryIndex}`} index={3 + Math.min(i, 5)}>
+                  <PressScale
+                    scaleTo={0.985}
+                    onLongPress={() => confirmDeleteEntry(entryIndex)}
+                    style={styles.entryRow}>
                     <View className="min-w-0 flex-1 pr-3">
                       <Text className="text-sm font-semibold text-ink" numberOfLines={1}>
                         {e.label || (pay ? 'जमा' : e.action === 'correction' ? 'सुधार' : 'उधार')}
@@ -129,12 +184,15 @@ export default function PersonScreen() {
                       {/* Running balance, frozen at write time — the passbook feel. */}
                       <Text className="mt-0.5 text-xs text-muted">बाकी ₹{e.after.toLocaleString('en-IN')}</Text>
                     </View>
-                  </View>
+                  </PressScale>
                 </Rise>
               );
             })
           )}
         </View>
+        {events.length > 0 && (
+          <Text className="mt-3 text-center text-xs text-muted">एंट्री हटाने के लिए देर तक दबाएँ</Text>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -163,5 +221,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     gap: 2,
+  },
+  entryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Porcelain.line,
+    backgroundColor: Porcelain.white,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
 });
