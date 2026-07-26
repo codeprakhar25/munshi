@@ -19,12 +19,15 @@
  */
 import { parseAmount } from './numbers';
 import { templateReply, replyLangFor, type ReplyContext } from './reply';
-import { chatTools, log, type ChatMessage, type ToolSchema } from './sarvam';
+import { chatTools, log, transliterate, type ChatMessage, type ToolSchema } from './sarvam';
 import type {
   Customer, Draft, DraftPerson, Entry, Khata, Session, Stage, Turn,
 } from './types';
 
 // ------------------------------------------------------------- matching -----
+
+/** Indic scripts other than Devanagari — unmatchable against the roster as-is. */
+export const FOREIGN_SCRIPT = /[\u0980-\u0DFF\u0A80-\u0AFF\u0A00-\u0A7F]/;
 
 /** Case/space normalization. Cross-script matching leans on `aliases` until §6 lands. */
 export const norm = (s: string): string =>
@@ -173,7 +176,10 @@ const LEDGER_TOOLS: ToolSchema[] = [{
               },
               name_spoken: {
                 type: 'string',
-                description: 'The person\'s name EXACTLY as the merchant said it, verbatim, in the script they used. Always fill this in whenever a name was spoken.',
+                description: 'The person\'s name COPIED CHARACTER FOR CHARACTER out of the user message. '
+                  + 'If the user message is in Devanagari the name must be in Devanagari, if Odia then Odia, if Latin then Latin. '
+                  + 'NEVER transliterate or romanise it: from "प्रखर ने सौ का आलू लिया" the name is "प्रखर", not "Prakhar". '
+                  + 'This name is written into the shopkeeper\'s book as-is. Always fill it in whenever a name was spoken.',
               },
               amount: {
                 type: 'number',
@@ -181,7 +187,10 @@ const LEDGER_TOOLS: ToolSchema[] = [{
               },
               label: {
                 type: 'string',
-                description: 'What was bought, if mentioned (doodh, sabun, milk). Omit otherwise.',
+                description:
+                  'What the money was for, if mentioned — copy it VERBATIM in the words and script spoken, all of it: '
+                  + 'a single item (doodh, sabun), a list (aalu pyaaz tamatar), or a category (kirana ka saaman, sabzi). '
+                  + 'Never translate it and never shorten a list to one item. Omit only when nothing was named.',
               },
               missing: {
                 type: 'string',
@@ -258,7 +267,11 @@ const PICK_TOOL: ToolSchema[] = [{
         choice: {
           type: 'string',
           enum: ['existing', 'new_person', 'unclear'],
-          description: 'existing = they picked somebody from the list offered. new_person = none of them, open a new khata. unclear = they did not answer the question.',
+          description: 'existing = they picked somebody from the list offered. '
+            + 'new_person = open a new khata: either they said none of the options match, OR they were asked '
+            + '"X is not in the book, open a new khata?" and simply agreed (haan, ha, ji, theek hai, yes, ok, kholo, likh do). '
+            + 'A bare yes when NO options were offered always means new_person. '
+            + 'unclear = they did not answer the question at all.',
         },
         customer_id: { type: 'string', description: 'For choice=existing: the id from the list offered, e.g. c1.' },
         name_spoken: { type: 'string', description: 'For choice=new_person: the name, verbatim.' },
@@ -332,6 +345,10 @@ Kavita owe?") that is one action of kind balance_query — never unclear.
 If one part of the command is unusable — no amount, or you cannot tell who — mark only
 that entry unclear and still act on the parts you did understand.
 
+When goods are named — an item, a list, or a category like "kirana ka saaman" — copy them
+into label exactly as spoken. The merchant reads the khata back later; the label is how
+they remember what a line was for.
+
 Report only the amount the merchant actually said. Never add, subtract or infer a number.
 The merchant speaks Hindi, English, or a mix of both.`;
 
@@ -391,6 +408,9 @@ export function stageIntent(
    *  only when this is the sole action — with several actions in one breath
    *  there is no way to know which one a stray number belongs to. */
   soleUtterance?: string,
+  /** True when the transcript was romanised — the model's id guess is then
+   *  unreliable, because it never saw the original script. */
+  romanised?: boolean,
 ): Draft {
   const kindIn = act?.kind ?? 'unclear';
   const spoken = act?.name_spoken?.trim() || null;
@@ -473,9 +493,30 @@ export function stageIntent(
     draft.options = byName.map(asPerson);
     draft.status = 'ambiguous';
     return draft;
-  } else if (byId) person = byId;
+  } else if (byId && !romanised) {
+    // Only trust the model's id when we had no better way to check. If the name
+    // WAS romanised and still matched nobody, that customer is not in the book,
+    // and the model's pick is the nearest-sounding roster entry — which is how
+    // "ସୁରେଶ" (Suresh) got credited to Sunita Devi.
+    person = byId;
+  } else if (byId && romanised) {
+    log('rejected_model_pick', { spoken, wouldHaveBeen: byId.id });
+  }
 
   if (!person) {
+    // A name we do not recognise is a NEW customer, so open the khata and write
+    // it — asking "whose name?" was a dead end the merchant could not get out of.
+    // Cost of this choice: a mis-transcription creates a junk row (प्रख्यात vs
+    // प्रखर), recoverable for one turn via `undo`.
+    if (spoken) {
+      log('auto_new_customer', { spoken, amount });
+      draft.kind = 'new_customer';
+      if (amount === null) { draft.status = 'needs_amount'; draft.before = 0; return draft; }
+      draft.amount = amount;
+      price(draft, 0);
+      draft.status = 'ready';
+      return draft;
+    }
     draft.status = 'needs_customer';
     return draft;
   }
@@ -662,7 +703,9 @@ function draftFacts(d: Draft): string {
     case 'needs_amount':
       return `${who} currently owes ${d.before ?? 0} rupees. The merchant did NOT say how many rupees. Ask how much. Do NOT state any new balance.`;
     case 'needs_customer':
-      return `You could not tell WHICH customer "${d.name_spoken ?? ''}" is. Ask which customer, by name. Do NOT state any balance.`;
+      return d.name_spoken
+        ? `"${d.name_spoken}" is not in the book at all. Ask whether to open a NEW khata for them. Do NOT state any balance.`
+        : 'You could not tell which customer they meant. Ask whose name it is. Do NOT state any balance.';
     default:
       return 'You did not understand the command. Ask the merchant to repeat it simply, for example "Ramesh ne 200 diye".';
   }
@@ -757,7 +800,22 @@ export async function runTurn(
   const seq = () => `d${session.drafts.length + 1}_${Date.now().toString(36)}`;
 
   const stageFresh = async (text: string) => {
-    const actions = await extract(text, khata, session);
+    // Asked to read an Odia sentence against a Devanagari roster, the model
+    // transliterates the name ITSELF and mangles it on the way — "ସୁରେଶ" came
+    // back as "सुनील", which then matched nobody (or worse, matched Sunita).
+    // Romanising the whole transcript first means the model never crosses
+    // scripts: it sees Latin, and Latin compares directly to name_en.
+    let text2 = text;
+    let romanised = false;
+    if (FOREIGN_SCRIPT.test(text)) {
+      const r = await transliterate(text, opts.lang ?? 'od-IN', 'en-IN');
+      if (r) {
+        log('romanised_transcript', { from: text, to: r });
+        text2 = r;
+        romanised = true;
+      }
+    }
+    const actions = await extract(text2, khata, session);
     const queries: string[] = [];
     // Running balances for anyone already touched by a draft this turn, so a
     // second mention of the same person chains off the first.
@@ -774,7 +832,7 @@ export async function runTurn(
           : 'You could not tell which customer they asked about. Ask which one.');
         continue;
       }
-      session.drafts.push(stageIntent(khata, a, seq(), projected, actions.length === 1 ? text : undefined));
+      session.drafts.push(stageIntent(khata, a, seq(), projected, actions.length === 1 ? text2 : undefined, romanised));
     }
     notes.push(...queries);
   };
@@ -851,6 +909,8 @@ export async function runTurn(
         }
       } else if (focus && a.choice === 'new_person') {
         focus.kind = 'new_customer';
+        // Keep the name we already heard: answering "haan" carries no name, and
+        // overwriting it with undefined loses the customer entirely.
         focus.name_spoken = a.name_spoken ?? focus.name_spoken;
         focus.options = [];
         focus.status = focus.amount === null ? 'needs_amount' : 'ready';

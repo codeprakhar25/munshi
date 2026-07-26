@@ -99,6 +99,14 @@ function pending(d: Draft, l: ReplyLang): string | null {
     return l === 'hi' ? `${who(d, l)} के कितने रुपये?` : `How many rupees for ${who(d, l)}?`;
   }
   if (d.status === 'needs_customer') {
+    // A name we do not recognise is almost always a NEW customer, not a
+    // mishearing. Asking "whose name?" over and over is a dead end — offer the
+    // thing they actually want and let one "हाँ" do it.
+    if (d.name_spoken) {
+      return l === 'hi'
+        ? `${d.name_spoken} बही में नहीं है। नया खाता खोलूँ?`
+        : `${d.name_spoken} isn't in the book. Open a new khata?`;
+    }
     return l === 'hi' ? 'किसका नाम बोलिए?' : 'Which customer?';
   }
   return null;

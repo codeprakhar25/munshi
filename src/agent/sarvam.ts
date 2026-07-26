@@ -234,6 +234,31 @@ export async function ttsRest(
 }
 
 /**
+ * Romanise a name so it can be compared to a roster in another script.
+ *
+ * Without this, an Odia "ସୁରେଶ" cannot be compared to a Devanagari book at all,
+ * the deterministic matcher finds nothing, and we fall back to whichever id the
+ * model guessed — which it MUST supply, so it picks the nearest-sounding
+ * customer. Observed: Suresh silently credited to Sunita Devi.
+ */
+export async function transliterate(
+  input: string,
+  source_language_code: string,
+  target_language_code = 'en-IN',
+): Promise<string | null> {
+  try {
+    const d = await post<{ transliterated_text?: string }>('/transliterate', {
+      input, source_language_code, target_language_code, numerals_format: 'international',
+    });
+    return d?.transliterated_text ?? null;
+  } catch (e) {
+    // Never fail a turn over a romanisation; the caller falls back to the model.
+    log('transliterate_failed', { msg: e instanceof Error ? e.message : String(e) });
+    return null;
+  }
+}
+
+/**
  * Bulbul speaks 11 languages — Urdu is NOT one of them, while Saaras STT *does*
  * accept ur-IN, so the two are not symmetric. Report the downgrade rather than
  * swallowing it: the main HTML prototype sends ur-IN to Bulbul and the call fails

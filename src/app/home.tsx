@@ -3,12 +3,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, View as RNView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import type { Customer, Khata } from '@/agent/types';
-import { PersonSheet } from '@/components/home/PersonSheet';
+import type { Khata } from '@/agent/types';
 import { AmbientBackdrop, Gradient, PressScale, Rise, useBreath, useCountUp } from '@/components/ui/motion';
 import { VoiceOverlay } from '@/components/voice/VoiceOverlay';
 import { AppFonts, Porcelain } from '@/constants/theme';
-import { loadKhata, totalDue } from '@/db/khata';
+import { loadKhata, resetKhata, totalDue } from '@/db/khata';
 import { persistPeopleIntoKhata } from '@/lib/khata-sync';
 import { useStrings } from '@/lib/i18n';
 import { Pressable, ScrollView, Text, View } from '@/tw';
@@ -24,7 +23,6 @@ export default function HomeScreen() {
   const t = useStrings(language);
   const [khata, setKhata] = useState<Khata | null>(null);
   const [voiceOpen, setVoiceOpen] = useState(false);
-  const [person, setPerson] = useState<Customer | null>(null);
   const [view, setView] = useState<VoiceView>({
     state: 'idle', heard: '', reply: '', stage: 'idle', drafts: [], error: null,
   });
@@ -104,9 +102,19 @@ export default function HomeScreen() {
       <AmbientBackdrop image="radial-gradient(circle at 0% 100%, #e0e7ff 0%, rgba(224,231,255,0) 45%)" />
 
       <View className="flex-row items-center justify-between px-5 pb-2 pt-2">
-        <Text className="text-ink" style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 26, letterSpacing: -0.8 }}>
-          Munshi
-        </Text>
+        {/* Long-press: restore the seed ledger — the between-demos reset. */}
+        <Pressable
+          onLongPress={() => {
+            void resetKhata().then((k) => {
+              setKhata(k);
+              voice.current?.setKhata(k);
+              voice.current?.resetConversation();
+            });
+          }}>
+          <Text className="text-ink" style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 26, letterSpacing: -0.8 }}>
+            Munshi
+          </Text>
+        </Pressable>
         <View className="flex-row gap-1.5">
           <PressScale
             onPress={() => router.push('/onboarding/map')}
@@ -188,7 +196,7 @@ export default function HomeScreen() {
           <View className="gap-2">
             {owing.map((c, i) => (
               <Rise key={c.id} index={3 + Math.min(i, 4)}>
-                <PressScale scaleTo={0.985} onPress={() => setPerson(c)} style={styles.row}>
+                <PressScale scaleTo={0.985} onPress={() => router.push(`/person/${c.id}`)} style={styles.row}>
                   <View
                     className="h-11 w-11 items-center justify-center rounded-2xl"
                     style={{ backgroundColor: Porcelain.paper2 }}>
@@ -201,7 +209,7 @@ export default function HomeScreen() {
                       {c.name}
                     </Text>
                     <Text className="text-xs text-muted" numberOfLines={1}>
-                      {c.phone || c.aliases[0] || '—'} · {t.entriesN(c.entries.length)}
+                      {c.entries[c.entries.length - 1]?.label || c.phone || c.aliases[0] || '—'} · {t.entriesN(c.entries.length)}
                     </Text>
                   </View>
                   <Text style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 19, color: Porcelain.rose }}>
@@ -244,7 +252,6 @@ export default function HomeScreen() {
         onBargeIn={() => void voice.current?.bargeIn()}
         fabCenterFromBottom={28 + 37}
       />
-      <PersonSheet customer={person} onClose={() => setPerson(null)} />
     </SafeAreaView>
   );
 }

@@ -58,14 +58,18 @@ export function PersonSheet({ customer, onClose }: Props) {
                         <Text className="text-sm font-semibold text-ink">{e.label || (pay ? 'जमा' : 'उधार')}</Text>
                         <Text className="mt-0.5 text-xs text-muted">{when}</Text>
                       </View>
-                      <Text
-                        style={{
-                          fontFamily: AppFonts.serifSemiBold,
-                          fontSize: 17,
-                          color: pay ? Porcelain.leaf : Porcelain.rose,
-                        }}>
-                        {pay ? '−' : '+'}₹{e.amount}
-                      </Text>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text
+                          style={{
+                            fontFamily: AppFonts.serifSemiBold,
+                            fontSize: 17,
+                            color: pay ? Porcelain.leaf : Porcelain.rose,
+                          }}>
+                          {pay ? '−' : '+'}₹{e.amount}
+                        </Text>
+                        {/* Running balance, frozen at write time — the passbook feel. */}
+                        <Text className="mt-0.5 text-xs text-muted">बाकी ₹{e.after}</Text>
+                      </View>
                     </View>
                   </Animated.View>
                 );
