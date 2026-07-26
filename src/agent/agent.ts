@@ -397,9 +397,30 @@ export function stageIntent(
     draft.status = act?.missing === 'amount' ? 'needs_amount' : act?.missing === 'customer' ? 'needs_customer' : 'unclear';
   }
 
-  // Opening a brand-new khata: there is nobody to resolve, only a name to keep.
+  // Opening a brand-new khata — but ONLY if the name really is new.
+  //
+  // Seen on device: a duplicate "गोपाल" khata appeared alongside the existing
+  // "गोपाल यादव", because the model classified an ordinary udhaar as
+  // new_customer and nothing checked the roster first. Splitting one customer
+  // across two khatas is silent, permanent, and exactly what a shopkeeper cannot
+  // afford — half their money hides under a second name. So the deterministic
+  // match runs BEFORE we agree to create anybody.
   if (draft.kind === 'new_customer' && draft.status !== 'needs_customer') {
     if (!spoken) { draft.status = 'needs_customer'; return draft; }
+
+    const existing = matchCustomers(khata, spoken);
+    if (existing.length === 1) {
+      log('new_customer_exists', { spoken, matched: existing[0].id });
+      // They already have a khata. Treat it as ordinary credit against it.
+      draft.kind = 'udhaar';
+    } else if (existing.length > 1) {
+      draft.options = existing.map(asPerson);
+      draft.status = 'ambiguous';
+      return draft;
+    }
+  }
+
+  if (draft.kind === 'new_customer' && draft.status !== 'needs_customer') {
     price(draft, 0);
     draft.amount = amount ?? 0;
     price(draft, 0);

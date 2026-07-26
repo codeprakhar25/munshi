@@ -1,3 +1,4 @@
+import { Fraunces_500Medium, Fraunces_600SemiBold, Fraunces_700Bold } from '@expo-google-fonts/fraunces';
 import { NotoSansDevanagari_400Regular } from '@expo-google-fonts/noto-sans-devanagari';
 import { NotoSansTamil_400Regular } from '@expo-google-fonts/noto-sans-tamil';
 import { Roboto_400Regular, Roboto_500Medium, Roboto_700Bold } from '@expo-google-fonts/roboto';
@@ -33,6 +34,9 @@ export default function RootLayout() {
   const hasRedirected = useRef(false);
 
   const [fontsLoaded, fontError] = useFonts({
+    Fraunces_500Medium,
+    Fraunces_600SemiBold,
+    Fraunces_700Bold,
     Urbanist_500Medium,
     Urbanist_600SemiBold,
     Urbanist_700Bold,

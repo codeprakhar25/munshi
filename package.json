@@ -3,6 +3,7 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "dependencies": {
+    "@expo-google-fonts/fraunces": "^0.4.1",
     "@expo-google-fonts/noto-sans-devanagari": "^0.4.1",
     "@expo-google-fonts/noto-sans-tamil": "^0.4.3",
     "@expo-google-fonts/roboto": "^0.4.3",

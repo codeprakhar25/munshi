@@ -204,6 +204,18 @@ const SCENES: Scene[] = [
     },
   },
   {
+    name: 'nodupe',
+    why: 'a "new khata" for somebody already in the book must NOT split them in two',
+    // Seen on device: a second "गोपाल" appeared next to "गोपाल यादव", hiding
+    // half his balance under a duplicate name.
+    turns: ['गोपाल का नया खाता खोलो, दो सौ उधार', 'हाँ'],
+    expect: (_t, k) => {
+      const gopals = k.customers.filter((c) => c.name_en.toLowerCase().includes('gopal') || c.name.includes('गोपाल'));
+      if (gopals.length !== 1) throw new Error(`split into ${gopals.length} khatas: ${gopals.map((g) => `${g.name}=${g.balance}`).join(', ')}`);
+      if (gopals[0].balance !== 2300) throw new Error(`expected 2100+200=2300 on the existing khata, got ${gopals[0].balance}`);
+    },
+  },
+  {
     name: 'english',
     why: 'English in -> English out, same machine',
     turns: ['Kavita took three hundred and fifty rupees of goods'],
