@@ -4,7 +4,7 @@
  * Tap-to-talk keeps the mic open between turns (Saaras END_SPEECH ends each
  * utterance). Overlay API: startConversation / stopConversation / bargeIn.
  */
-import { runTurn } from '@/agent/agent';
+import { runTurn, speculate } from '@/agent/agent';
 import { log } from '@/agent/sarvam';
 import { newSession, type Draft, type Khata, type Session, type Stage } from '@/agent/types';
 import { saveKhata } from '@/db/khata';
@@ -17,6 +17,13 @@ import { SttSocket, TtsSocket } from '@/voice/sockets';
  * the merchant feels.
  */
 const END_SILENCE_MS = 400;
+
+/**
+ * Quiet gap after a partial transcript before speculating on it. Long enough
+ * that we are not firing a call on every word, short enough that the extraction
+ * is under way before they finish the sentence.
+ */
+const SPECULATE_AFTER_MS = 450;
 
 export type VoiceState = 'idle' | 'listening' | 'thinking' | 'speaking';
 
@@ -44,6 +51,7 @@ export class VoiceSession {
   private busy = false;
   private listening = false;
   private releasedAt = 0;
+  private specTimer: ReturnType<typeof setTimeout> | null = null;
   /** Set from the onboarding store; the language replies default to. */
   appLang = 'hi';
 
@@ -93,7 +101,17 @@ export class VoiceSession {
     if (!this.stt?.live) {
       this.stt = new SttSocket({
         onOpen: () => this.cb.onView({ state: 'listening', error: null }),
-        onPartial: (text) => this.cb.onView({ heard: text }),
+        onPartial: (text) => {
+          this.cb.onView({ heard: text });
+          // Start extracting while they are still talking. Read-only and
+          // discarded unless the final transcript matches exactly.
+          if (this.specTimer) clearTimeout(this.specTimer);
+          if (text.trim().length >= 12) {
+            this.specTimer = setTimeout(() => {
+              if (!this.busy) speculate(text, this.khata, this.session);
+            }, SPECULATE_AFTER_MS);
+          }
+        },
         // In tap mode this IS the end of turn — the merchant never signals it.
         onSpeechEnd: () => { this.releasedAt = Date.now(); this.arm(); },
         onError: (msg) => this.cb.onView({ error: msg }),
@@ -279,6 +297,7 @@ export class VoiceSession {
 
   async dispose(): Promise<void> {
     this.listening = false;
+    if (this.specTimer) clearTimeout(this.specTimer);
     if (this.endTimer) clearTimeout(this.endTimer);
     this.stt?.close();
     // Without this, unmounting mid-reply leaves Bulbul streaming to nobody until

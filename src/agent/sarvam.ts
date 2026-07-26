@@ -125,6 +125,8 @@ export interface ChatOptions {
   tool_choice?: ToolChoice;
   /** Shows up in llm_timing so you can tell which call is slow. */
   label?: string;
+  /** 'low' | 'medium' | 'high' — the only documented lever on thinking length. */
+  reasoning_effort?: string;
 }
 
 /**
@@ -139,11 +141,12 @@ export interface ChatOptions {
 export async function chatTools<A = Record<string, unknown>>(
   messages: ChatMessage[],
   tools: ToolSchema[],
-  { model = 'sarvam-30b', temperature = 0, max_tokens = 900, tool_choice = 'auto', label = 'chat' }: ChatOptions = {},
+  { model = 'sarvam-30b', temperature = 0, max_tokens = 900, tool_choice = 'auto', label = 'chat', reasoning_effort }: ChatOptions = {},
 ): Promise<ToolCall<A>[]> {
   const t0 = Date.now();
   const data = await post<ChatResponse>('/v1/chat/completions', {
     model, messages, tools, tool_choice, temperature, max_tokens,
+    ...(reasoning_effort ? { reasoning_effort } : {}),
   });
   const msg = data?.choices?.[0]?.message;
   // Reasoning length is the dial that actually moves latency on these models —

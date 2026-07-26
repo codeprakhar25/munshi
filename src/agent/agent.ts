@@ -751,7 +751,47 @@ function recompute(session: Session): void {
   session.focus = null;
 }
 
+/**
+ * Speculative extraction.
+ *
+ * Extraction is 1.5-4.5s of server time no matter how the prompt is shaped, and
+ * it currently starts only once the merchant stops talking — so they wait for
+ * all of it. But partial transcripts arrive WHILE they speak, so the call can be
+ * started early and be finished, or nearly, by the time they stop.
+ *
+ * Only ever a read: results are cached by transcript text and thrown away if the
+ * final transcript differs. Nothing may be written from a partial — "Ramesh ne
+ * pachaas" becoming "pachaas hazaar" after a write is unrecoverable.
+ */
+const SPECULATIVE = new Map<string, Promise<RawAction[]>>();
+
+const specKey = (t: string) => t.replace(/\s+/g, ' ').trim().toLowerCase();
+
+export function speculate(transcript: string, khata: Khata, session: Session): void {
+  const key = specKey(transcript);
+  if (!key || SPECULATIVE.has(key)) return;
+  if (SPECULATIVE.size > 8) SPECULATIVE.clear();
+  log('speculate', { transcript });
+  // Swallow failures: a speculative miss must never surface as a turn error.
+  SPECULATIVE.set(key, extractUncached(transcript, khata, session).catch(() => []));
+}
+
 async function extract(transcript: string, khata: Khata, session: Session) {
+  const key = specKey(transcript);
+  const hit = SPECULATIVE.get(key);
+  if (hit) {
+    SPECULATIVE.delete(key);
+    const actions = await hit;
+    if (actions.length) {
+      log('speculate_hit', { transcript });
+      return actions;
+    }
+  }
+  SPECULATIVE.clear();
+  return extractUncached(transcript, khata, session);
+}
+
+async function extractUncached(transcript: string, khata: Khata, session: Session) {
   const messages: ChatMessage[] = [
     { role: 'system', content: EXTRACT_SYSTEM(khata) },
     ...session.history.slice(-6),

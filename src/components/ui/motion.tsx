@@ -7,7 +7,7 @@
  * (Fabric, RN 0.76+): CSS gradient syntax, zero native dependencies.
  */
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, type StyleProp, type ViewStyle, type PressableProps } from 'react-native';
+import { Pressable, StyleSheet, View as RNView, type StyleProp, type ViewStyle, type PressableProps } from 'react-native';
 import Animated, {
   Easing,
   FadeIn,
@@ -110,6 +110,40 @@ export function Gradient({
 /** Full-bleed ambient wash behind a screen. Sits absolute, never intercepts touches. */
 export function AmbientBackdrop({ image }: { image: string }) {
   return <Gradient image={image} pointerEvents="none" style={StyleSheet.absoluteFill} />;
+}
+
+/**
+ * A soft circular glow built from stacked translucent discs — used where a
+ * radial gradient would sit behind a face/FAB. Pure Views: cannot ever render
+ * as a square, which the gradient version did on some Android renderers.
+ */
+export function GlowDisc({ size, rgb }: { size: number; rgb: string }) {
+  const layers: [number, number][] = [
+    [1, 0.07],
+    [0.72, 0.1],
+    [0.48, 0.16],
+  ];
+  return (
+    <RNView pointerEvents="none" style={{ width: size, height: size }}>
+      {layers.map(([s, a], i) => {
+        const d = size * s;
+        return (
+          <RNView
+            key={i}
+            style={{
+              position: 'absolute',
+              width: d,
+              height: d,
+              borderRadius: d / 2,
+              left: (size - d) / 2,
+              top: (size - d) / 2,
+              backgroundColor: `rgba(${rgb},${a})`,
+            }}
+          />
+        );
+      })}
+    </RNView>
+  );
 }
 
 /**

@@ -26,7 +26,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { Draft } from '@/agent/types';
-import { fadeUp, Gradient, PressScale } from '@/components/ui/motion';
+import { fadeUp, GlowDisc, Gradient, PressScale } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
 import { Text } from '@/tw';
 import type { VoiceState, VoiceView } from '@/voice/session';
@@ -315,13 +315,24 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
       entering={FadeIn.duration(300)}
       exiting={FadeOut.duration(220)}
       onPress={onClose}
-      style={[StyleSheet.absoluteFill, { zIndex: 40 }]}>
-      {/* Frosted wash over the home screen. Real gaussian blur needs expo-blur
-          (native, next rebuild) — this heavy frost is the no-rebuild stand-in. */}
-      <RNView pointerEvents="none" style={styles.frost} />
+      // elevation must beat every elevated view on home (max is the FAB at 10):
+      // Android draw order follows elevation, not zIndex, across siblings.
+      style={[StyleSheet.absoluteFill, { zIndex: 40, elevation: 30, backgroundColor: 'rgba(251,249,246,0.58)' }]}>
+      {/* Opaque stage — home is fully hidden. The gradients keep it from reading
+          as a blank white sheet: saffron dawn above, warmth pooling below. */}
       <Gradient
         pointerEvents="none"
-        image="radial-gradient(circle at 50% 46%, rgba(255,248,235,0.85) 0%, rgba(255,248,235,0) 80%)"
+        image="radial-gradient(circle at 50% 0%, rgba(254,243,199,0.9) 0%, rgba(254,243,199,0) 60%)"
+        style={StyleSheet.absoluteFill}
+      />
+      <Gradient
+        pointerEvents="none"
+        image="radial-gradient(circle at 80% 100%, rgba(255,237,213,0.8) 0%, rgba(255,237,213,0) 55%)"
+        style={StyleSheet.absoluteFill}
+      />
+      <Gradient
+        pointerEvents="none"
+        image="radial-gradient(circle at 50% 46%, rgba(255,248,235,0.9) 0%, rgba(255,248,235,0) 70%)"
         style={StyleSheet.absoluteFill}
       />
 
@@ -352,12 +363,9 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
               </RNView>
             )}
 
-            {/* Glow halo behind the orb. */}
+            {/* Glow halo behind the orb — stacked discs, never renders square. */}
             <Animated.View style={[styles.glow, glowStyle]}>
-              <Gradient
-                image={`radial-gradient(circle at 50% 50%, ${spec?.glow ?? 'rgba(245,158,11,0.14)'} 0%, rgba(245,158,11,0) 68%)`}
-                style={StyleSheet.absoluteFill}
-              />
+              <GlowDisc size={190} rgb={active === 'listening' ? '34,197,94' : '245,158,11'} />
             </Animated.View>
           </Animated.View>
 
@@ -383,10 +391,6 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
 }
 
 const styles = StyleSheet.create({
-  frost: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(251,249,246,0.995)',
-  },
   center: {
     flex: 1,
     alignItems: 'center',
@@ -422,8 +426,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: 190,
     height: 190,
-    borderRadius: 95,
-    overflow: 'hidden',
     top: (STAGE - 190) / 2,
     left: (STAGE - 190) / 2,
   },
