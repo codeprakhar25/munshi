@@ -1,11 +1,21 @@
 # Munshi — architecture review
 
-**Status:** proposed, for review. No implementation until this is signed off.
-**Date:** 2026-07-26 · **Scope:** the voice agent (add / resolve / edit khatas). Scanner and
-collections are separate beats.
+**Status:** reviewed 2026-07-26 — building.
+**Scope:** the voice agent (add / resolve / edit khatas). Scanner and collections are separate beats.
 
-This is a decision record. Every entry is a choice, what it was chosen over, and why. Disagree with
-any row and the code that depends on it hasn't been written yet.
+This is a decision record. Every entry is a choice, what it was chosen over, and why.
+
+**Review outcome:**
+
+- **§1 Storage — AsyncStorage: confirmed.** Building on it.
+- **§6 Language — deferred.** `appLang`, the store-in-app-script rule, i18n and the
+  `/transliterate` bridge are all out of this pass. This costs nothing today: Saaras already runs
+  with `language-code=unknown` in codemix mode, so Hindi / English / Hinglish input works as-is,
+  and the `say` tool already replies in whatever language was spoken. What we lose until later is
+  only the *storage script* guarantee — a name heard in English is stored as it was heard.
+  §7's contact matching therefore falls back to the `aliases` already on each row plus plain
+  case/space normalization, instead of a transliterated Latin match key.
+- Remaining open questions (barge-in, launch language set, demo-day server host) parked with §6.
 
 ---
 
@@ -246,7 +256,12 @@ listening to it.
 
 ---
 
-## 6. Language — app language ≠ spoken language
+## 6. Language — app language ≠ spoken language  ⏸ DEFERRED
+
+> **Not in this pass.** Kept here as the agreed target. What ships now is Saaras auto-detect
+> (`language-code=unknown`, codemix) with the reply in whatever language was spoken — already
+> verified working across Hindi, English and Hinglish, and requiring no work. The rest of this
+> section lands when we pick it up.
 
 | | source | drives |
 |---|---|---|
@@ -275,17 +290,25 @@ typed dictionary catches missing keys at compile time.
 
 ---
 
-## 7. Contacts — `expo-contacts` + a Latin match key
+## 7. Contacts — `expo-contacts` + a match key
 
-**Decision:** normalize every name — khata rows, device contacts, the spoken token — to a Latin
-`match_key` via Sarvam `/transliterate` → `en-IN`, cached per contact. Match on that.
+**Decision:** normalize every name — khata rows, device contacts, the spoken token — to a single
+`match_key` and compare on that.
 
 **Over:** fuzzy string matching on the display names.
 
-**Why.** The merchant may speak English while their book is in Devanagari. Direct string comparison
-across scripts fails at 100%, and fuzzy matching across scripts is meaningless. Transliterating both
-sides to one script makes it an ordinary comparison. Cached, so it costs one call per new contact,
-not one per turn.
+**Why.** The merchant may speak English while their book is in Devanagari. Direct comparison across
+scripts fails at 100%, and fuzzy matching across scripts is meaningless. Normalizing both sides to
+one form makes it an ordinary comparison.
+
+**Now (language deferred):** the key is built from the `aliases` already carried on each row — the
+seed data lists each customer in both scripts — plus lowercase/trim normalization. Good enough
+because the roster is handed to the model every turn, so the *model* does most of the matching;
+`match_key` is the deterministic backstop.
+
+**Later (with §6):** build the key with Sarvam `/transliterate` → `en-IN`, cached per contact, so
+it costs one call per new contact rather than one per turn. That's what makes an English-spoken
+name find a Devanagari row without the alias having been written down in advance.
 
 **Resolution order:**
 
@@ -326,10 +349,10 @@ src/
   voice/jitter.ts    buffer + scheduling (unit-testable)
   voice/socket.ts    ws client + message protocol
   db/khata.ts        AsyncStorage store, append-only entries, derived balance
-  contacts.ts        expo-contacts + cached Latin match key
+  contacts.ts        expo-contacts + match key
   state/session.ts   client mirror of the draft machine — what the UI binds to
-  i18n/              typed string dictionary
   app/index.tsx      the entire (throwaway) UI for now
+  i18n/              ⏸ deferred with §6
 ```
 
 ---
@@ -345,7 +368,8 @@ and we rebuild **once**:
 | `react-native-audio-api` | yes | mic capture + playback |
 | `@react-native-async-storage/async-storage` | yes | the khata |
 | `expo-contacts` | yes | contact linking |
-| `expo-localization` | yes | default `appLang` guess |
+
+`expo-localization` is dropped from this pass — it existed only to guess a default `appLang` (§6).
 
 **Permissions:** `RECORD_AUDIO`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MICROPHONE`,
 `READ_CONTACTS`. Call `AudioManager.requestRecordingPermissions()` and
@@ -369,13 +393,13 @@ Inside a framework's abstraction it would have been much harder to catch.
 
 ---
 
-## Open questions for review
+## Parked
 
-1. **AsyncStorage vs `expo-sqlite`** — §1 argues AsyncStorage on the "no translation layer" ground.
-   If the OCR register import is landing sooner than expected, sqlite now is defensible.
-2. **Barge-in** — §5 trades it away for echo safety. Worth keeping if the demo wants an interrupt
-   moment.
-3. **Launch languages** — hi / en / mr / ta from the mock. Adding more is cheap for STT, but each
-   one needs its own i18n strings.
+1. ~~AsyncStorage vs `expo-sqlite`~~ — **settled: AsyncStorage.** Revisit when the OCR flow starts
+   importing whole registers.
+2. **Barge-in** — §5 trades it away for echo safety. Worth revisiting if the demo wants an
+   interrupt moment.
+3. **Launch languages** — hi / en / mr / ta from the mock. Cheap for STT; each needs its own i18n
+   strings, so it lands with §6.
 4. **Where the server runs on demo day** — laptop on venue WiFi is simplest; `ap-south-1` is
    250–400ms/hop faster than anything US-hosted if we need it off the laptop.
