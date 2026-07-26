@@ -112,6 +112,50 @@ function BreathRing({ size, delay, tint }: { size: number; delay: number; tint: 
   );
 }
 
+/**
+ * The "working on it" signature: three saffron motes orbiting the face while
+ * the model is thinking — unmistakably different from the breathing idle and
+ * the outward listening/speaking waves.
+ */
+const ORBIT = 176;
+
+function ThinkingOrbit() {
+  const r = useSharedValue(0);
+  useEffect(() => {
+    r.set(withRepeat(withTiming(1, { duration: 1500, easing: Easing.linear }), -1, false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const spin = useAnimatedStyle(() => ({ transform: [{ rotate: `${r.value * 360}deg` }] }));
+  const radius = ORBIT / 2 - 5;
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        { position: 'absolute', width: ORBIT, height: ORBIT, top: (STAGE - ORBIT) / 2, left: (STAGE - ORBIT) / 2 },
+        spin,
+      ]}>
+      {[0, 1, 2].map((i) => {
+        const angle = (i * 2 * Math.PI) / 3;
+        const size = 8 - i * 2;
+        return (
+          <RNView
+            key={i}
+            style={{
+              position: 'absolute',
+              width: size,
+              height: size,
+              borderRadius: size / 2,
+              backgroundColor: `rgba(217,119,6,${0.85 - i * 0.25})`,
+              left: ORBIT / 2 - size / 2 + radius * Math.cos(angle),
+              top: ORBIT / 2 - size / 2 + radius * Math.sin(angle),
+            }}
+          />
+        );
+      })}
+    </Animated.View>
+  );
+}
+
 const DUST = [
   { left: 0.18, top: 0.3, delay: 0, size: 4 },
   { left: 0.78, top: 0.28, delay: 400, size: 3 },
@@ -304,6 +348,7 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
               <RNView style={StyleSheet.absoluteFill}>
                 <BreathRing size={RING_SIZES[1]} delay={0} tint={mood === 'thinking' ? 'rgba(217,119,6,0.35)' : 'rgba(28,25,23,0.16)'} />
                 <BreathRing size={RING_SIZES[2]} delay={1200} tint={mood === 'thinking' ? 'rgba(217,119,6,0.22)' : 'rgba(28,25,23,0.1)'} />
+                {mood === 'thinking' && <ThinkingOrbit />}
               </RNView>
             )}
 

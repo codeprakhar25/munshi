@@ -91,7 +91,9 @@ function pending(d: Draft, l: ReplyLang): string | null {
   }
   if (d.status === 'ambiguous') {
     const names = d.options.map((o) => (l === 'en' ? o.name_en : o.name)).join(l === 'hi' ? ' या ' : ' or ');
-    return l === 'hi' ? `कौन सा — ${names}?` : `Which one — ${names}?`;
+    // Offer "new" explicitly: the same question fires when the model picks a
+    // near-match for somebody who is not in the book at all.
+    return l === 'hi' ? `कौन सा — ${names}? या नया?` : `Which one — ${names}? Or a new person?`;
   }
   if (d.status === 'needs_amount') {
     return l === 'hi' ? `${who(d, l)} के कितने रुपये?` : `How many rupees for ${who(d, l)}?`;

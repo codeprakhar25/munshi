@@ -339,6 +339,20 @@ const SPEAK_SYSTEM = `You are the voice of a shopkeeper's udhaar-book assistant.
 The arithmetic has already been done for you and is given below as fact.
 Never compute, never round, never invent a number. Say only what the facts support.`;
 
+/**
+ * Naming the language explicitly matters: told only "use the same language the
+ * merchant used", the model answered an Odia speaker in broken Hinglish. Hindi
+ * and English are templated locally, so this list is the languages that actually
+ * reach the phrasing model.
+ */
+const LANG_NAME: Record<string, string> = {
+  'od-IN': 'Odia (ଓଡ଼ିଆ)', 'or-IN': 'Odia (ଓଡ଼ିଆ)',
+  'bn-IN': 'Bengali (বাংলা)', 'ta-IN': 'Tamil (தமிழ்)', 'te-IN': 'Telugu (తెలుగు)',
+  'mr-IN': 'Marathi (मराठी)', 'gu-IN': 'Gujarati (ગુજરાતી)', 'kn-IN': 'Kannada (ಕನ್ನಡ)',
+  'ml-IN': 'Malayalam (മലയാളം)', 'pa-IN': 'Punjabi (ਪੰਜਾਬੀ)', 'ur-IN': 'Urdu (اردو)',
+  'hi-IN': 'Hindi (हिन्दी)', 'en-IN': 'English',
+};
+
 // ---------------------------------------------------------------- drafts ----
 
 interface RawAction {
@@ -432,8 +446,15 @@ export function stageIntent(
   }
 
   if (draft.kind === 'new_customer' && draft.status !== 'needs_customer') {
-    price(draft, 0);
-    draft.amount = amount ?? 0;
+    // Assuming zero is a guess about money. Number words in Odia, Tamil, Bengali
+    // are not parsed locally, so a dropped amount used to open the khata at 0
+    // and lose the udhaar the merchant just dictated. Ask instead.
+    if (amount === null) {
+      draft.status = 'needs_amount';
+      draft.before = 0;
+      return draft;
+    }
+    draft.amount = amount;
     price(draft, 0);
     draft.kind = 'new_customer';
     draft.status = 'ready';
@@ -457,6 +478,21 @@ export function stageIntent(
   if (!person) {
     draft.status = 'needs_customer';
     return draft;
+  }
+
+  // Cross-script safety net. An Odia or Tamil name cannot be compared to a
+  // Devanagari roster, so `byName` is empty and we are trusting the model's pick
+  // alone — and the model cannot tell us a name was ambiguous, it just chooses.
+  // With no approval step that would be a silent write to the wrong person, so
+  // check whether the customer it picked shares a first name with anybody else.
+  if (!byName.length && person) {
+    const siblings = matchCustomers(khata, person.aliases?.[0] ?? person.name);
+    if (siblings.length > 1) {
+      log('cross_script_ambiguous', { spoken, picked: person.id, siblings: siblings.map((c) => c.id) });
+      draft.options = siblings.map(asPerson);
+      draft.status = 'ambiguous';
+      return draft;
+    }
   }
 
   draft.customer_id = person.id;
@@ -621,7 +657,8 @@ function draftFacts(d: Draft): string {
     }
     case 'ambiguous':
       return `The name "${d.name_spoken}" matches more than one person: ${d.options.map((o) => `${o.name_en} (owes ${o.balance})`).join(', ')}.`
-        + ' Ask WHICH ONE, naming them. Do not state any new balance.';
+        + ' Ask WHICH ONE, naming them, and mention they can say it is a NEW person instead.'
+        + ' Do not state any new balance.';
     case 'needs_amount':
       return `${who} currently owes ${d.before ?? 0} rupees. The merchant did NOT say how many rupees. Ask how much. Do NOT state any new balance.`;
     case 'needs_customer':
@@ -631,13 +668,18 @@ function draftFacts(d: Draft): string {
   }
 }
 
-async function composeReply(facts: string, transcript: string, terse: boolean): Promise<string> {
+async function composeReply(facts: string, transcript: string, terse: boolean, langCode?: string | null): Promise<string> {
   const messages: ChatMessage[] = [
     { role: 'system', content: SPEAK_SYSTEM },
     {
       role: 'user',
       // Every extra word is another second the merchant stands there waiting.
       content: `The merchant said: "${transcript}"\n\nFacts you must use:\n${facts}`
+        // Name the language rather than saying "the same one" — the model does
+        // not reliably infer it from a non-Devanagari script and drifts to Hinglish.
+        + (langCode && LANG_NAME[langCode]
+          ? `\n\nYou MUST reply in ${LANG_NAME[langCode]}, in that language's own script. Not Hindi, not English.`
+          : '')
         + (terse ? '\n\nKeep it to 10 words or fewer.' : ''),
     },
   ];
@@ -902,6 +944,14 @@ export async function runTurn(
       session.undo = { drafts: session.drafts.map((d) => ({ ...d })) };
       session.drafts = [];
       recompute(session);
+      // The templated path reads `committed` directly, but the phrasing model
+      // only sees `facts` — without this it was handed "nothing is pending" and
+      // replied "what would you like to record?" to an entry it had just saved.
+      notes.push(
+        `SAVED to the book: ${committed
+          .map((c) => `${c.name_en} now owes ${c.after} rupees (was ${c.before})`)
+          .join('; ')}. Tell the merchant this is done, briefly.`,
+      );
     }
   }
 
@@ -932,7 +982,7 @@ export async function runTurn(
   );
   const reply = templated
     ? speechSafe(templated)
-    : await composeReply(facts, transcript, session.drafts.length <= 1 && !notes.length);
+    : await composeReply(facts, transcript, session.drafts.length <= 1 && !notes.length, opts.lang);
   log('reply_source', { templated: !!templated, chars: reply.length });
 
   // Plain-text history: replaying raw tool_calls would need matching tool-result
