@@ -318,21 +318,17 @@ export function VoiceOverlay({ open, view, onClose, onBargeIn, fabCenterFromBott
       // elevation must beat every elevated view on home (max is the FAB at 10):
       // Android draw order follows elevation, not zIndex, across siblings.
       style={[StyleSheet.absoluteFill, { zIndex: 40, elevation: 30, backgroundColor: 'rgba(251,249,246,0.58)' }]}>
-      {/* Opaque stage — home is fully hidden. The gradients keep it from reading
-          as a blank white sheet: saffron dawn above, warmth pooling below. */}
+      {/* Ambience in LINEAR gradients only — this renderer draws radial
+          gradients as linear bands (the "rectangular box" bug), so radials are
+          banned on this overlay. Saffron dawn above, warmth pooling below. */}
       <Gradient
         pointerEvents="none"
-        image="radial-gradient(circle at 50% 0%, rgba(254,243,199,0.9) 0%, rgba(254,243,199,0) 60%)"
+        image="linear-gradient(180deg, rgba(254,243,199,0.85) 0%, rgba(254,243,199,0) 40%)"
         style={StyleSheet.absoluteFill}
       />
       <Gradient
         pointerEvents="none"
-        image="radial-gradient(circle at 80% 100%, rgba(255,237,213,0.8) 0%, rgba(255,237,213,0) 55%)"
-        style={StyleSheet.absoluteFill}
-      />
-      <Gradient
-        pointerEvents="none"
-        image="radial-gradient(circle at 50% 46%, rgba(255,248,235,0.9) 0%, rgba(255,248,235,0) 70%)"
+        image="linear-gradient(0deg, rgba(255,237,213,0.7) 0%, rgba(255,237,213,0) 38%)"
         style={StyleSheet.absoluteFill}
       />
 
@@ -445,6 +441,10 @@ const styles = StyleSheet.create({
   face: {
     width: '100%',
     height: '100%',
+    // Round the IMAGE itself: the source is circular art on a white square
+    // canvas, and Android drops parent overflow-clipping under an animated
+    // transform — which showed the canvas as a square box around the face.
+    borderRadius: ORB / 2,
   },
   session: {
     position: 'absolute',

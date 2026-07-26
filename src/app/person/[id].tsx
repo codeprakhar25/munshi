@@ -53,7 +53,7 @@ export default function PersonScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }} edges={['top']}>
-      <AmbientBackdrop image="radial-gradient(circle at 85% 0%, #ffedd5 0%, rgba(255,237,213,0) 55%)" />
+      <AmbientBackdrop image="linear-gradient(200deg, rgba(255,237,213,0.75) 0%, rgba(255,237,213,0) 38%)" />
 
       <View className="flex-row items-center justify-between px-4 pb-1 pt-2">
         <PressScale onPress={() => router.back()} style={styles.ghostIcon}>

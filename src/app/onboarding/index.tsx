@@ -18,7 +18,7 @@ export default function OnboardingSplash() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Porcelain.paper }}>
-      <AmbientBackdrop image="radial-gradient(circle at 50% -10%, #ffffff 0%, rgba(255,255,255,0) 55%)" />
+      <AmbientBackdrop image="linear-gradient(180deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0) 45%)" />
       <View className="flex-1 justify-between px-6 pb-6 pt-8">
         <View className="flex-1 items-center justify-center gap-2.5">
           <Rise index={0}>

@@ -128,6 +128,16 @@ export function templateReply(ctx: ReplyContext, l: ReplyLang | null): string | 
   if (!l) return null;
 
   if (ctx.committed.length) {
+    // Never let an overpayment pass silently: the balance stops at zero, so
+    // without saying this the extra rupees would simply not appear anywhere.
+    const over = ctx.committed.filter((c) => c.overpaid);
+    if (over.length === 1 && ctx.committed.length === 1) {
+      const c = over[0];
+      const who2 = l === 'en' ? c.name_en : (c.name ?? c.name_en);
+      return l === 'hi'
+        ? `${who2} का हिसाब पूरा हुआ, ${c.overpaid} रुपये ज़्यादा दिए।`
+        : `${who2} is fully settled, and paid ${c.overpaid} rupees extra.`;
+    }
     // Past three names, reading every balance back is a recital the merchant
     // stands through — and they can see the rows update. Acknowledge and stop.
     if (ctx.committed.length >= 3) {

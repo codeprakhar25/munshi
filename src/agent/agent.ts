@@ -88,17 +88,19 @@ const asPerson = (c: Customer): DraftPerson => ({
  * Balance is DERIVED — a fold over the passbook, never a field we assign to.
  * `correction` sets an absolute figure, so this cannot be a plain sum.
  *
- * A NEGATIVE balance means the shop owes the customer: they paid more than they
- * owed and are in credit. This must NOT be clamped to zero. Clamping inside the
- * fold destroys the credit permanently, and the next purchase then re-bills money
- * the customer has already handed over — owe 500, pay 700, later take 150 of
- * goods, and a clamping ledger says they owe 150 when they are actually 50 up.
+ * A balance never goes below zero. In practice a negative came from a misheard
+ * amount or an udhaar misread as a payment, not from a real advance, and with no
+ * approval step those landed silently.
+ *
+ * The excess is NOT silently swallowed, though — that was the original bug. It is
+ * recorded on the entry as `overpaid` and spoken back, so money handed over that
+ * did not land on a balance is still visible.
  */
 export function deriveBalance(entries: Entry[]): number {
   let b = 0;
   for (const e of entries) {
-    b = e.action === 'payment' ? b - e.amount
-      : e.action === 'correction' ? e.amount
+    b = e.action === 'payment' ? Math.max(0, b - e.amount)
+      : e.action === 'correction' ? Math.max(0, e.amount)
       : b + e.amount;
   }
   return b;
@@ -383,8 +385,8 @@ interface RawAction {
 
 /** Must apply exactly the same arithmetic as `deriveBalance`, or the preview lies. */
 export const applyAction = (kind: Draft['kind'], base: number, amount: number): number =>
-  kind === 'payment' ? base - amount
-    : kind === 'correction' ? amount
+  kind === 'payment' ? Math.max(0, base - amount)
+    : kind === 'correction' ? Math.max(0, amount)
     : base + amount;
 
 const price = (d: Draft, base: number): void => {
@@ -631,12 +633,13 @@ export function commitDrafts(khata: Khata, drafts: Draft[]): Turn['committed'] {
     // the passbook. Deriving here keeps every row consistent with the fold.
     const before = cust.balance;
     const after = applyAction(d.kind === 'new_customer' ? 'udhaar' : d.kind, before, amount);
-    const entry: Entry = { ts, action, amount, before, after, label: d.label };
+    const overpaid = d.kind === 'payment' && amount > before ? amount - before : 0;
+    const entry: Entry = { ts, action, amount, before, after, label: d.label, ...(overpaid ? { overpaid } : {}) };
     cust.entries.push(entry);
     cust.balance = deriveBalance(cust.entries);
     khata.audit.push({ ...entry, customer_id: cust.id });
 
-    committed.push({ customer_id: cust.id, name: cust.name, name_en: cust.name_en, before, after: cust.balance, amount });
+    committed.push({ customer_id: cust.id, name: cust.name, name_en: cust.name_en, before, after: cust.balance, amount, ...(overpaid ? { overpaid } : {}) });
   }
   return committed;
 }

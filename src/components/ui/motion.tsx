@@ -84,8 +84,10 @@ export function PressScale({ scaleTo = 0.97, style, children, ...press }: PressS
 /**
  * Gradient container. `image` takes CSS syntax:
  *   linear-gradient(135deg, #f59e0b, #b45309)
- *   radial-gradient(circle at 80% 0%, #ffedd5 0%, transparent 50%)
- * Falls back to nothing (transparent) if the runtime rejects the value.
+ *
+ * LINEAR ONLY. This device's renderer draws radial-gradient as a linear band
+ * with hard rectangular edges (observed on-device 2026-07-26 — the "square in
+ * the overlay" bug). For circular glows use <GlowDisc> instead.
  */
 export function Gradient({
   image,
