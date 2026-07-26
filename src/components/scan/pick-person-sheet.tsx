@@ -39,7 +39,6 @@ export function PickPersonSheet({
 }: PickPersonSheetProps) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      {/* Backdrop — only this dismisses. Sheet is a sibling View so list taps aren't stolen. */}
       <RNView style={styles.root}>
         <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
         <RNView style={styles.sheet}>
@@ -49,25 +48,21 @@ export function PickPersonSheet({
             <ScrollView
               style={styles.matchList}
               keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}>
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ gap: 8, paddingBottom: 4 }}>
               {matches.map((p) => (
                 <Pressable
                   key={p.id}
                   onPress={() => onPickExisting(p)}
-                  style={({ pressed }) => [
-                    styles.matchRow,
-                    pressed && { backgroundColor: Porcelain.saffronMist },
-                  ]}>
-                  <View className="min-w-0 flex-1 pr-2">
-                    <Text style={styles.matchName}>{p.name}</Text>
-                    <Text style={styles.matchMeta}>
-                      {p.name_en !== p.name ? p.name_en : ''}
-                      {p.balance !== 0
-                        ? ` · ${p.balance < 0 ? '−' : ''}₹${Math.abs(p.balance)}`
-                        : ''}
+                  style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>
+                  <Text style={styles.cardName} numberOfLines={1}>
+                    {p.name}
+                  </Text>
+                  {p.name_en && p.name_en !== p.name ? (
+                    <Text style={styles.cardSub} numberOfLines={1}>
+                      {p.name_en}
                     </Text>
-                  </View>
-                  <Text style={styles.matchMeta}>{p.phone ?? walkInLabel}</Text>
+                  ) : null}
                 </Pressable>
               ))}
               {fromContactsLabel ? (
@@ -83,12 +78,10 @@ export function PickPersonSheet({
               />
               <Pressable
                 onPress={() => onWalkIn(nameToken ?? 'Walk-in')}
-                style={({ pressed }) => [
-                  styles.walkIn,
-                  pressed && { backgroundColor: Porcelain.saffronMist },
-                ]}>
-                <Text style={styles.walkInText}>
-                  {walkInLabel}: {nameToken ?? '?'}
+                style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>
+                <Text style={styles.cardName}>
+                  {walkInLabel}
+                  {nameToken ? `: ${nameToken}` : ''}
                 </Text>
               </Pressable>
             </View>
@@ -130,50 +123,37 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   matchList: {
-    maxHeight: 280,
+    maxHeight: 300,
   },
-  matchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderRadius: 14,
+  card: {
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: Porcelain.line,
     backgroundColor: Porcelain.paper,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    marginBottom: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
-  matchName: {
-    fontFamily: AppFonts.bodyMedium,
-    fontSize: 14,
+  cardPressed: {
+    backgroundColor: Porcelain.saffronMist,
+    borderColor: Porcelain.saffron,
+  },
+  cardName: {
+    fontFamily: AppFonts.displaySemiBold,
+    fontSize: 16,
     color: Porcelain.ink,
   },
-  matchMeta: {
+  cardSub: {
+    marginTop: 2,
     fontFamily: AppFonts.body,
-    fontSize: 12,
+    fontSize: 13,
     color: Porcelain.muted,
   },
   sectionLabel: {
-    marginTop: 4,
-    marginBottom: 4,
+    marginTop: 8,
     fontFamily: AppFonts.displayBold,
     fontSize: 10,
     letterSpacing: 0.8,
     color: Porcelain.muted,
     textTransform: 'uppercase',
-  },
-  walkIn: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Porcelain.line,
-    backgroundColor: Porcelain.paper,
-    paddingHorizontal: 12,
-    paddingVertical: 14,
-  },
-  walkInText: {
-    fontFamily: AppFonts.displayBold,
-    fontSize: 14,
-    color: Porcelain.ink,
   },
 });

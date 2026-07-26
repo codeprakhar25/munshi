@@ -1,124 +1,88 @@
 import { StyleSheet } from 'react-native';
 
 import type { Draft, DraftLineItem } from '@/agent/types';
-import { Gradient, PressScale } from '@/components/ui/motion';
+import { PressScale } from '@/components/ui/motion';
 import { AppFonts, Porcelain } from '@/constants/theme';
-import { itemNet, toggleDirection } from '@/lib/scan-draft-math';
+import { toggleDirection } from '@/lib/scan-draft-math';
 import { Pressable, Text, TextInput, View } from '@/tw';
 
 interface LineItemCardProps {
   draft: Draft;
   selectPersonLabel: string;
-  confirmLabel: string;
-  discardLabel: string;
   udhaarLabel: string;
   jamaLabel: string;
-  netLabel: string;
   alreadyImportedLabel: string;
   onChange: (patch: Partial<Draft>) => void;
   onSelectPerson: () => void;
-  onConfirm: () => void;
-  onDiscard: () => void;
 }
 
+/**
+ * Scan person-card: person (or select) · item rows with amount + direction.
+ * No per-card confirm / skip / net — Save at the bottom writes the list.
+ */
 export function LineItemCard({
   draft,
   selectPersonLabel,
-  confirmLabel,
-  discardLabel,
   udhaarLabel,
   jamaLabel,
-  netLabel,
   alreadyImportedLabel,
   onChange,
   onSelectPerson,
-  onConfirm,
-  onDiscard,
 }: LineItemCardProps) {
   const items = draft.items ?? [];
   const imported = !!draft.already_imported;
-  const confirmed = !!draft.confirmed;
-  const locked = imported || confirmed;
   const person = draft.person;
-  const canConfirm =
-    !imported && !confirmed && !!person && draft.status === 'ready' && items.length > 0;
-
-  const net = items.length
-    ? itemNet(items)
-    : (draft.amount ?? 0) * (draft.kind === 'payment' ? -1 : 1);
+  const needsPerson = !person && !imported;
+  // OCR name when matcher didn't attach a contact yet.
+  const scannedName = (draft.name_spoken || '').trim();
 
   function patchItem(id: string, patch: Partial<DraftLineItem>) {
     const next = items.map((i) => (i.id === id ? { ...i, ...patch } : i));
     onChange({ items: next });
   }
 
-  const borderColor = imported
-    ? Porcelain.saffron
-    : confirmed
-      ? Porcelain.leaf
-      : Porcelain.line;
-  const bg = imported
-    ? Porcelain.saffronMist
-    : confirmed
-      ? Porcelain.leafMist
-      : Porcelain.white;
-
   return (
-    <View style={[styles.card, { borderColor, backgroundColor: bg, opacity: imported ? 0.94 : 1 }]}>
+    <View
+      style={[
+        styles.card,
+        {
+          borderColor: imported ? Porcelain.saffron : Porcelain.line,
+          backgroundColor: imported ? Porcelain.saffronMist : Porcelain.white,
+          opacity: imported ? 0.94 : 1,
+        },
+      ]}>
       {imported && (
         <View style={styles.importedBadge}>
-          <Text
-            style={{
-              fontFamily: AppFonts.displayBold,
-              fontSize: 10,
-              letterSpacing: 0.6,
-              color: '#fff',
-              textTransform: 'uppercase',
-            }}>
-            {alreadyImportedLabel}
-          </Text>
+          <Text style={styles.importedText}>{alreadyImportedLabel}</Text>
         </View>
       )}
 
-      {confirmed && !imported && (
-        <View style={styles.confirmedBadge}>
-          <Text
-            style={{
-              fontFamily: AppFonts.displayBold,
-              fontSize: 10,
-              color: Porcelain.leaf,
-            }}>
-            ✓
-          </Text>
+      {/* Person: chip if matched; else “Select person” (+ show scanned token). */}
+      {person ? (
+        <PressScale scaleTo={0.98} onPress={onSelectPerson} disabled={imported}>
+          <View style={[styles.personChip, { backgroundColor: Porcelain.saffronMist }]}>
+            <Text style={[styles.personText, { color: Porcelain.saffronDeep }]} numberOfLines={1}>
+              {person.name}
+            </Text>
+          </View>
+        </PressScale>
+      ) : needsPerson ? (
+        <View className="gap-1.5">
+          {scannedName ? (
+            <Text style={styles.scannedHint} numberOfLines={2}>
+              {scannedName}
+            </Text>
+          ) : null}
+          <PressScale scaleTo={0.98} onPress={onSelectPerson}>
+            <View style={[styles.personChip, styles.selectChip]}>
+              <Text style={[styles.personText, { color: Porcelain.muted }]}>
+                {selectPersonLabel}
+              </Text>
+            </View>
+          </PressScale>
         </View>
-      )}
+      ) : null}
 
-      {/* Person chip */}
-      <PressScale scaleTo={0.98} onPress={onSelectPerson} disabled={locked}>
-        <View
-          style={[
-            styles.personChip,
-            {
-              backgroundColor: person ? Porcelain.saffronMist : Porcelain.paper2,
-              borderWidth: person ? 0 : 1,
-              borderColor: Porcelain.line,
-            },
-          ]}>
-          <Text
-            style={{
-              fontFamily: AppFonts.displayBold,
-              fontSize: 13,
-              color: person ? Porcelain.saffronDeep : Porcelain.muted,
-            }}>
-            {person ? person.name : selectPersonLabel}
-            {person
-              ? ` · ${person.balance < 0 ? '−' : ''}₹${Math.abs(person.balance).toLocaleString('en-IN')}`
-              : ''}
-          </Text>
-        </View>
-      </PressScale>
-
-      {/* Itemized rows — direction toggle is the critical control */}
       <View className="gap-2">
         {items.map((item) => {
           const pay = item.direction === 'payment';
@@ -128,8 +92,8 @@ export function LineItemCard({
                 value={item.label}
                 onChangeText={(v) => patchItem(item.id, { label: v })}
                 placeholder="—"
-                editable={!locked}
-                style={[styles.labelInput, { fontFamily: AppFonts.body }]}
+                editable={!imported}
+                style={styles.labelInput}
                 placeholderTextColor={Porcelain.muted}
               />
               <TextInput
@@ -139,14 +103,14 @@ export function LineItemCard({
                   patchItem(item.id, { amount: Number.isFinite(n) ? n : 0 });
                 }}
                 keyboardType="numeric"
-                editable={!locked}
-                style={[styles.amountInput, { fontFamily: AppFonts.displaySemiBold }]}
+                editable={!imported}
+                style={styles.amountInput}
               />
               <Pressable
                 onPress={() =>
-                  !locked && patchItem(item.id, { direction: toggleDirection(item.direction) })
+                  !imported && patchItem(item.id, { direction: toggleDirection(item.direction) })
                 }
-                disabled={locked}
+                disabled={imported}
                 style={[
                   styles.dirToggle,
                   { backgroundColor: pay ? Porcelain.leafMist : Porcelain.roseMist },
@@ -168,92 +132,6 @@ export function LineItemCard({
           <Text style={{ fontFamily: AppFonts.body, fontSize: 12, color: Porcelain.muted }}>—</Text>
         )}
       </View>
-
-      {/* Net + before → after */}
-      <View style={styles.netRow}>
-        <View>
-          <Text
-            style={{
-              fontFamily: AppFonts.displayBold,
-              fontSize: 10,
-              letterSpacing: 0.8,
-              color: Porcelain.muted,
-              textTransform: 'uppercase',
-            }}>
-            {netLabel}
-          </Text>
-          <Text
-            style={{
-              fontFamily: AppFonts.serifSemiBold,
-              fontSize: 22,
-              color: net < 0 ? Porcelain.leaf : Porcelain.rose,
-              letterSpacing: -0.4,
-            }}>
-            {net < 0 ? '−' : '+'}₹{Math.abs(net).toLocaleString('en-IN')}
-          </Text>
-        </View>
-        {draft.before != null && draft.after != null && (
-          <Text
-            style={{
-              fontFamily: AppFonts.bodyMedium,
-              fontSize: 14,
-              color: Porcelain.muted,
-            }}>
-            ₹{draft.before.toLocaleString('en-IN')} → ₹{draft.after.toLocaleString('en-IN')}
-          </Text>
-        )}
-      </View>
-
-      {!locked && (
-        <View className="flex-row gap-2">
-          <PressScale scaleTo={0.98} onPress={onDiscard} style={{ flex: 1 }}>
-            <View style={styles.discardBtn}>
-              <Text
-                style={{
-                  fontFamily: AppFonts.displayBold,
-                  fontSize: 14,
-                  color: Porcelain.ink,
-                  textAlign: 'center',
-                }}>
-                {discardLabel}
-              </Text>
-            </View>
-          </PressScale>
-          <PressScale
-            scaleTo={0.98}
-            onPress={onConfirm}
-            disabled={!canConfirm}
-            style={{ flex: 1, opacity: canConfirm ? 1 : 0.45 }}>
-            {canConfirm ? (
-              <Gradient
-                image="linear-gradient(135deg, #f59e0b 0%, #b45309 100%)"
-                style={styles.confirmBtn}>
-                <Text
-                  style={{
-                    fontFamily: AppFonts.displayBold,
-                    fontSize: 14,
-                    color: '#fff',
-                    textAlign: 'center',
-                  }}>
-                  {confirmLabel}
-                </Text>
-              </Gradient>
-            ) : (
-              <View style={[styles.confirmBtn, { backgroundColor: Porcelain.line }]}>
-                <Text
-                  style={{
-                    fontFamily: AppFonts.displayBold,
-                    fontSize: 14,
-                    color: Porcelain.muted,
-                    textAlign: 'center',
-                  }}>
-                  {confirmLabel}
-                </Text>
-              </View>
-            )}
-          </PressScale>
-        </View>
-      )}
     </View>
   );
 }
@@ -277,22 +155,32 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     backgroundColor: Porcelain.saffronDeep,
   },
-  confirmedBadge: {
-    position: 'absolute',
-    top: 14,
-    right: 14,
-    height: 22,
-    width: 22,
-    borderRadius: 11,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: Porcelain.leafMist,
+  importedText: {
+    fontFamily: AppFonts.displayBold,
+    fontSize: 10,
+    letterSpacing: 0.6,
+    color: '#fff',
+    textTransform: 'uppercase',
   },
   personChip: {
     alignSelf: 'flex-start',
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 7,
+  },
+  selectChip: {
+    backgroundColor: Porcelain.paper2,
+    borderWidth: 1,
+    borderColor: Porcelain.line,
+  },
+  personText: {
+    fontFamily: AppFonts.displayBold,
+    fontSize: 13,
+  },
+  scannedHint: {
+    fontFamily: AppFonts.body,
+    fontSize: 13,
+    color: Porcelain.ink,
   },
   itemRow: {
     flexDirection: 'row',
@@ -309,6 +197,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     fontSize: 14,
+    fontFamily: AppFonts.body,
     color: Porcelain.ink,
     paddingVertical: 4,
   },
@@ -322,6 +211,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     textAlign: 'right',
     fontSize: 14,
+    fontFamily: AppFonts.displaySemiBold,
     color: Porcelain.ink,
   },
   dirToggle: {
@@ -329,26 +219,5 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 7,
-  },
-  netRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Porcelain.line,
-    paddingTop: 12,
-  },
-  discardBtn: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Porcelain.line,
-    backgroundColor: Porcelain.paper,
-    paddingVertical: 12,
-  },
-  confirmBtn: {
-    borderRadius: 14,
-    paddingVertical: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 });

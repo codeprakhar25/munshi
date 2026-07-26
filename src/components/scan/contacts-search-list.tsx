@@ -13,10 +13,7 @@ interface ContactsSearchListProps {
 
 const PAGE = 40;
 
-/**
- * Virtualized + debounced search. Mapping thousands of contacts into a
- * ScrollView (old path) froze the JS thread so taps never registered.
- */
+/** Simple name cards — no phone clutter. Virtualized for large address books. */
 export function ContactsSearchList({ contacts, placeholder, onSelect }: ContactsSearchListProps) {
   const [query, setQuery] = useState('');
   const [debounced, setDebounced] = useState('');
@@ -26,7 +23,6 @@ export function ContactsSearchList({ contacts, placeholder, onSelect }: Contacts
     return () => clearTimeout(id);
   }, [query]);
 
-  // Pre-lower names once per contacts identity — avoids lowercasing every keystroke.
   const indexed = useMemo(
     () => contacts.map((c) => ({ c, key: c.name.toLowerCase() })),
     [contacts],
@@ -61,22 +57,18 @@ export function ContactsSearchList({ contacts, placeholder, onSelect }: Contacts
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         style={styles.list}
+        contentContainerStyle={styles.listContent}
         initialNumToRender={12}
         maxToRenderPerBatch={16}
         windowSize={5}
         removeClippedSubviews
-        ListEmptyComponent={
-          <Text style={styles.empty}>—</Text>
-        }
+        ListEmptyComponent={<Text style={styles.empty}>—</Text>}
         renderItem={({ item }) => (
           <Pressable
             onPress={() => onSelect(item)}
-            style={({ pressed }) => [styles.row, pressed && { backgroundColor: Porcelain.saffronMist }]}>
+            style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}>
             <Text style={styles.name} numberOfLines={1}>
               {item.name}
-            </Text>
-            <Text style={styles.phone} numberOfLines={1}>
-              {item.phone ?? ''}
             </Text>
           </Pressable>
         )}
@@ -86,7 +78,7 @@ export function ContactsSearchList({ contacts, placeholder, onSelect }: Contacts
 }
 
 const styles = StyleSheet.create({
-  wrap: { gap: 8 },
+  wrap: { gap: 10 },
   input: {
     borderRadius: 14,
     borderWidth: 1,
@@ -99,29 +91,28 @@ const styles = StyleSheet.create({
     color: Porcelain.ink,
   },
   list: {
-    maxHeight: 220,
+    maxHeight: 280,
   },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    paddingHorizontal: 4,
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Porcelain.line,
+  listContent: {
+    gap: 8,
+    paddingBottom: 4,
+  },
+  card: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Porcelain.line,
+    backgroundColor: Porcelain.paper,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  cardPressed: {
+    backgroundColor: Porcelain.saffronMist,
+    borderColor: Porcelain.saffron,
   },
   name: {
-    flex: 1,
-    fontSize: 14,
-    fontFamily: AppFonts.body,
+    fontSize: 16,
+    fontFamily: AppFonts.displaySemiBold,
     color: Porcelain.ink,
-  },
-  phone: {
-    fontSize: 12,
-    fontFamily: AppFonts.body,
-    color: Porcelain.muted,
-    maxWidth: '40%',
   },
   empty: {
     paddingVertical: 16,

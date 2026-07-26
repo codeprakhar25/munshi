@@ -131,6 +131,9 @@ export default function ScanProcessingScreen() {
         if (cancelled) return;
 
         const khata = await loadKhata();
+        // Names only, lazy — never blocks onboarding with a full-book dump.
+        await useDeviceContactsStore.getState().ensureLoaded();
+        if (cancelled) return;
         const contacts = useDeviceContactsStore.getState().contacts.map((c) => ({
           id: c.id,
           name: c.name,

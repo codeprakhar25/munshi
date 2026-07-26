@@ -1,6 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -37,6 +37,15 @@ function personFromPeople(
   };
 }
 
+/** Cards we can write to the home khata list (not already imported). */
+function isSavable(d: Draft): boolean {
+  if (d.already_imported) return false;
+  const hasMoney = (d.items?.length ?? 0) > 0 || (d.amount ?? 0) > 0;
+  if (!hasMoney) return false;
+  // Person attached, or OCR left a name we can open as walk-in.
+  return !!d.person || !!(d.name_spoken || '').trim();
+}
+
 export default function ScanReviewScreen() {
   const { entry: entryParam } = useLocalSearchParams<{ entry?: string }>();
   const entry: ScanEntry = entryParam === 'onboarding' ? 'onboarding' : 'general';
@@ -46,15 +55,21 @@ export default function ScanReviewScreen() {
 
   const drafts = useScanStore((s) => s.drafts);
   const updateDraft = useScanStore((s) => s.updateDraft);
-  const setDrafts = useScanStore((s) => s.setDrafts);
   const setSource = useScanStore((s) => s.setSource);
   const resetScan = useScanStore((s) => s.reset);
 
   const addPerson = usePeopleStore((s) => s.addPerson);
   const deviceContacts = useDeviceContactsStore((s) => s.contacts);
+  const ensureContacts = useDeviceContactsStore((s) => s.ensureLoaded);
 
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Lazy names-only load when picker opens — never on a dedicated "2k ready" screen.
+  useEffect(() => {
+    if (activeDraftId == null) return;
+    void ensureContacts();
+  }, [activeDraftId, ensureContacts]);
 
   const activeDraft = drafts.find((d) => d.id === activeDraftId) ?? null;
   const sheetMode: 'pick' | 'contacts' =
@@ -64,6 +79,8 @@ export default function ScanReviewScreen() {
     if (!activeDraft) return [];
     return activeDraft.options.length ? activeDraft.options : [];
   }, [activeDraft]);
+
+  const saveCount = drafts.filter(isSavable).length;
 
   function closeSheet() {
     setActiveDraftId(null);
@@ -117,10 +134,8 @@ export default function ScanReviewScreen() {
     if (!draft) return;
     const next = { ...draft, ...patch };
     const priced = reprice(next, next.person);
-    updateDraft(id, { ...patch, ...priced, confirmed: false });
+    updateDraft(id, { ...patch, ...priced });
   }
-
-  const confirmedCount = drafts.filter((d) => d.confirmed && !d.already_imported).length;
 
   async function addMore() {
     const perm = await ImagePicker.requestCameraPermissionsAsync();
@@ -132,20 +147,30 @@ export default function ScanReviewScreen() {
   }
 
   async function finish() {
-    if (saving || confirmedCount === 0) return;
+    if (saving || saveCount === 0) return;
     setSaving(true);
     try {
       const khata = await loadKhata();
-      const confirmed = useScanStore
-        .getState()
-        .drafts
-        .filter((d) => d.confirmed && !d.already_imported && d.status === 'ready');
+      const pending = useScanStore.getState().drafts.filter(isSavable);
+
+      // Attach walk-in people for OCR names that never got a contact match.
+      const withPeople: Draft[] = pending.map((d) => {
+        if (d.person) return { ...d, status: 'ready' as const };
+        const name = (d.name_spoken || 'Walk-in').trim();
+        const person = addPerson({
+          name,
+          aliases: [name.split(' ')[0] || name],
+          phone: null,
+          source: 'walk-in',
+        });
+        return { ...attachPerson(d, personFromPeople(person, 0)), status: 'ready' as const };
+      });
 
       const expanded: Draft[] = [];
-      for (const d of confirmed) {
+      for (const d of withPeople) {
         const items = d.items ?? [];
         if (!items.length) {
-          expanded.push({ ...d, status: 'ready' });
+          expanded.push({ ...d, status: 'ready', confirmed: true });
           continue;
         }
         for (const item of items) {
@@ -197,18 +222,6 @@ export default function ScanReviewScreen() {
           }}>
           {t.reviewSubtitle(drafts.length)}
         </Text>
-        {confirmedCount > 0 && (
-          <View style={styles.progressPill}>
-            <Text
-              style={{
-                fontFamily: AppFonts.displayBold,
-                fontSize: 12,
-                color: Porcelain.saffronDeep,
-              }}>
-              {confirmedCount}/{drafts.filter((d) => !d.already_imported).length} ✓
-            </Text>
-          </View>
-        )}
       </View>
 
       <ScrollView className="flex-1 px-5" contentContainerClassName="gap-3 pb-6">
@@ -224,16 +237,11 @@ export default function ScanReviewScreen() {
             <LineItemCard
               draft={draft}
               selectPersonLabel={t.selectPerson}
-              confirmLabel={t.confirmLine}
-              discardLabel={t.discardLine}
               udhaarLabel={t.udhaarShort}
               jamaLabel={t.jamaShort}
-              netLabel={t.netLabel}
               alreadyImportedLabel={t.alreadyImported}
               onChange={(patch) => onCardChange(draft.id, patch)}
               onSelectPerson={() => setActiveDraftId(draft.id)}
-              onConfirm={() => updateDraft(draft.id, { confirmed: true })}
-              onDiscard={() => setDrafts(drafts.filter((d) => d.id !== draft.id))}
             />
           </Rise>
         ))}
@@ -247,9 +255,9 @@ export default function ScanReviewScreen() {
         ) : (
           <>
             <SaffronButton
-              label={t.saveConfirmed(confirmedCount)}
+              label={t.saveConfirmed(saveCount)}
               onPress={finish}
-              disabled={confirmedCount === 0}
+              disabled={saveCount === 0}
             />
             <LineButton label={t.addMorePages} onPress={addMore} style={{ marginTop: 10 }} />
           </>
@@ -276,14 +284,6 @@ export default function ScanReviewScreen() {
 }
 
 const styles = StyleSheet.create({
-  progressPill: {
-    alignSelf: 'flex-start',
-    marginTop: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: Porcelain.saffronMist,
-  },
   footer: {
     paddingHorizontal: 20,
     paddingTop: 10,

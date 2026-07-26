@@ -9,22 +9,40 @@ import { AppFonts, Porcelain } from '@/constants/theme';
 import { useStrings } from '@/lib/i18n';
 import { Text, View } from '@/tw';
 import { useOnboardingStore } from '@/store/onboarding-store';
+import { DEMO_PEOPLE, type Person, usePeopleStore } from '@/store/people-store';
+
+function seedDemo(setPeople: (people: Person[]) => void) {
+  setPeople(
+    DEMO_PEOPLE.map((p, i) => ({
+      ...p,
+      id: `demo_${i + 1}`,
+    })),
+  );
+}
 
 export default function ContactsPermissionScreen() {
   const router = useRouter();
   const language = useOnboardingStore((s) => s.language);
   const setPermission = useOnboardingStore((s) => s.setPermission);
+  const setPeople = usePeopleStore((s) => s.setPeople);
+  const people = usePeopleStore((s) => s.people);
   const t = useStrings(language);
+
+  function goNext() {
+    // Alias map needs a small roster — demo only. Device book loads later on scan.
+    if (people.length === 0) seedDemo(setPeople);
+    router.replace('/onboarding/map');
+  }
 
   async function allow() {
     const { status } = await Contacts.requestPermissionsAsync();
     setPermission('contacts', status === 'granted' ? 'granted' : 'denied');
-    router.push('/onboarding/contacts-import');
+    goNext();
   }
 
   function skip() {
     setPermission('contacts', 'denied');
-    router.push('/onboarding/contacts-import');
+    goNext();
   }
 
   return (
@@ -37,17 +55,26 @@ export default function ContactsPermissionScreen() {
           </View>
         </Rise>
         <Rise index={1}>
-          <Text className="mb-2.5 text-ink" style={{ fontFamily: AppFonts.serifSemiBold, fontSize: 32, letterSpacing: -0.8, lineHeight: 36 }}>
+          <Text
+            className="mb-2.5 text-ink"
+            style={{
+              fontFamily: AppFonts.serifSemiBold,
+              fontSize: 32,
+              letterSpacing: -0.8,
+              lineHeight: 36,
+            }}>
             {t.contactsTitle}
           </Text>
         </Rise>
         <Rise index={2}>
-          <Text className="mb-7 max-w-[28ch] text-base leading-6 text-muted" style={{ fontFamily: AppFonts.body }}>
+          <Text
+            className="mb-7 max-w-[28ch] text-base leading-6 text-muted"
+            style={{ fontFamily: AppFonts.body }}>
             {t.contactsBody}
           </Text>
         </Rise>
         <Rise index={3} style={{ gap: 8 }}>
-          <InkButton label={t.chooseContacts} onPress={allow} />
+          <InkButton label={t.allow} onPress={allow} />
           <LineButton label={t.useDemo} onPress={skip} />
         </Rise>
       </View>
